@@ -14,6 +14,16 @@ def hello():
     return "hello world."
 
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware  # 导入CORS中间件
+
+# 配置CORS跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:4200"],  # 允许所有来源，生产环境请改为你的前端地址
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有HTTP方法（包括OPTIONS预检）
+    allow_headers=["*"],
+)
 
 # 定义接收的 JSON 结构
 class Item(BaseModel):

@@ -1,9 +1,0 @@
-<mat-sidenav-container fxFlexFill>
-  <mat-sidenav  mode="side" [ngStyle]="{'width.em': 10}" opened="true" #sidenav>
-      <a [routerLink] = "['order']" routerLinkActive="active" mat-button>订购</a><br/>
-      <a [routerLink] = "['revoke']" routerLinkActive="active" mat-button>退货</a>
-  </mat-sidenav>
-  <mat-sidenav-content fxFlexFill>
-    <router-outlet></router-outlet>
-  </mat-sidenav-content>
-</mat-sidenav-container> 

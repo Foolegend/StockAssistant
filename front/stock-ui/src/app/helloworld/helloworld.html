@@ -1,0 +1,12 @@
+<div class="box">
+  <h2>HelloWorld 组件（调用 FastAPI）</h2>
+
+  <div *ngIf="apiResult" class="api-data">
+    <h3>后端返回数据：</h3>
+    <pre>{{ apiResult | json }}</pre>
+  </div>
+
+  <div *ngIf="!apiResult">
+    正在调用接口...
+  </div>
+</div>

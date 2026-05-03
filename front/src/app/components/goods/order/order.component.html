@@ -1,8 +1,0 @@
-<mat-tab-group>
-  <mat-tab *ngFor="let types of typesOfModule;let i=index" label = "{{types}}"> 
-      <circle-progress [percent]="getShowPercent(i)"
-      [subtitle]="getCircleSubtitle(i)">
-      </circle-progress>
-      <button (click)="process(i)">{{types}}</button>
-  </mat-tab>
-</mat-tab-group>
