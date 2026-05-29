@@ -63,8 +63,9 @@ backend = LocalShellBackend(
         **os.environ.copy(),
         "PYTHONHASHSEED": "0",
         "SKILL_ROOT": skill_root,
-        "PYTHON_EXEC": python_exec,
+        "PYTHON_EXEC": python_exec
     },
+    virtual_mode=True,
     timeout=120,
     max_output_bytes=100000,
 )
@@ -78,7 +79,8 @@ agent = create_deep_agent(
     checkpointer = checkpointer,
     system_prompt = system_prompt
 )
-if __name__ == "__main__":
+
+def stock_analysis():
     print("=====智能助手已启动，输入q 退出 =====")
     while True:
         question = input("======>请输入: ")
@@ -119,3 +121,5 @@ if __name__ == "__main__":
                 for m in chunk["tools"]["messages"]:
                     print(f"Tool: {m.name}, Output: \n{m.content}")
 
+if __name__ == '__main__':
+    stock_analysis()
