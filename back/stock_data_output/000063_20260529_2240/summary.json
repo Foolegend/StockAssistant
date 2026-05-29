@@ -1,0 +1,112 @@
+{
+  "stock_code": "000063.SZ",
+  "stock_name": "中兴通讯",
+  "market": "sz",
+  "output_dir": "D:\\project\\StockAssistant\\back\\src\\stock_data_output\\000063_20260529_2240",
+  "fetch_time": "2026-05-29T22:40:55.917291",
+  "kline_source": "eastmoney",
+  "images": {
+    "kline": "D:\\project\\StockAssistant\\back\\src\\stock_data_output\\000063_20260529_2240\\kline_em.png",
+    "kline_intraday": "D:\\project\\StockAssistant\\back\\src\\stock_data_output\\000063_20260529_2240\\kline_intraday.png",
+    "valuation": "D:\\project\\StockAssistant\\back\\src\\stock_data_output\\000063_20260529_2240\\valuation.png"
+  },
+  "data": {
+    "financials": {
+      "currentPrice": 36.72,
+      "previousClose": 38.3,
+      "trailingPE": 33.51,
+      "priceToBook": 2.29,
+      "marketCap": 175651401050.63998,
+      "fiftyTwoWeekHigh": 38.78,
+      "fiftyTwoWeekLow": 36.44,
+      "shortName": "中兴通讯"
+    },
+    "technicals": {
+      "close": 36.72,
+      "ma5": 36.33,
+      "ma20": 37.19,
+      "vol_ratio": 1.86,
+      "rsi": 50.5,
+      "macd_hist": -0.1366,
+      "prev_macd_hist": -0.1771,
+      "ma60": 35.84,
+      "ma_status": "交叉缠绕",
+      "macd_status": "动能增强",
+      "rsi_status": "中性"
+    },
+    "capital_flow_summary": {
+      "type": "北向资金",
+      "consecutive_days": 0,
+      "direction": "净卖出",
+      "recent_total_万股": 0.0
+    },
+    "main_capital_flow": {
+      "recent_days": [
+        {
+          "date": "2026-05-29",
+          "main_net_inflow": -1226069008.0,
+          "retail_net_inflow": -1275668784.0
+        }
+      ],
+      "total_main_net_inflow": -1226069008.0,
+      "direction": "主力净流出",
+      "consecutive_days": 1
+    },
+    "cls_news": [],
+    "analyst_reports": [
+      {
+        "org": "华源证券",
+        "rating": "买入",
+        "change": 3,
+        "title": "来水偏枯业绩稳健 关注雅砻江流域装机成长性",
+        "date": "2026-05-29",
+        "infoCode": "AP202605291823033509",
+        "pdf_url": "https://pdf.dfcfw.com/pdf/H3_AP202605291823033509_1.pdf"
+      },
+      {
+        "org": "华源证券",
+        "rating": "买入",
+        "change": 3,
+        "title": "来水改善业绩高增 华电集团水电上市公司",
+        "date": "2026-05-29",
+        "infoCode": "AP202605291823031956",
+        "pdf_url": "https://pdf.dfcfw.com/pdf/H3_AP202605291823031956_1.pdf"
+      },
+      {
+        "org": "开源证券",
+        "rating": "买入",
+        "change": 3,
+        "title": "公司深度报告：氯碱化工龙头全面转型升级，“北鲲计划”开启新征程",
+        "date": "2026-05-29",
+        "infoCode": "AP202605291823018596",
+        "pdf_url": "https://pdf.dfcfw.com/pdf/H3_AP202605291823018596_1.pdf"
+      },
+      {
+        "org": "中邮证券",
+        "rating": "买入",
+        "change": 3,
+        "title": "护航AI算力进阶",
+        "date": "2026-05-29",
+        "infoCode": "AP202605291823016538",
+        "pdf_url": "https://pdf.dfcfw.com/pdf/H3_AP202605291823016538_1.pdf"
+      },
+      {
+        "org": "中邮证券",
+        "rating": "买入",
+        "change": 2,
+        "title": "终见曙光",
+        "date": "2026-05-29",
+        "infoCode": "AP202605291823016526",
+        "pdf_url": "https://pdf.dfcfw.com/pdf/H3_AP202605291823016526_1.pdf"
+      }
+    ],
+    "macro": {},
+    "adr": {}
+  },
+  "text_charts": {},
+  "export_options": {
+    "pdf_cmd": "python3 D:\\project\\StockAssistant\\back\\src\\export_report.py {out}/report.md --format pdf",
+    "html_cmd": "python3 D:\\project\\StockAssistant\\back\\src\\export_report.py {out}/report.md --format html",
+    "open_html": "open {out}/report.html"
+  }
+}
