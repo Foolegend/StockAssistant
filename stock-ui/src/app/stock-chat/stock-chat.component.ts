@@ -24,8 +24,7 @@ export class StockChatComponent implements OnInit {
   constructor(private http: HttpClient, private cdr: ChangeDetectorRef) { }
 
   ngOnInit(): void {
-    // 页面加载时调用 Agent Chat
-    this.sendChat();
+    // 页面加载时不再自动调用 sendChat()
   }
 
   // 调用 Agent Chat 接口
