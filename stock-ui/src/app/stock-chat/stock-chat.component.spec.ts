@@ -1,18 +1,18 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
-import { Helloworld } from './helloworld';
+import { StockChatComponent } from './stock-chat.component';
 
-describe('Helloworld', () => {
-  let component: Helloworld;
-  let fixture: ComponentFixture<Helloworld>;
+describe('StockChatComponent', () => {
+  let component: StockChatComponent;
+  let fixture: ComponentFixture<StockChatComponent>;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [Helloworld]
+      imports: [StockChatComponent]
     })
     .compileComponents();
 
-    fixture = TestBed.createComponent(Helloworld);
+    fixture = TestBed.createComponent(StockChatComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
   });
