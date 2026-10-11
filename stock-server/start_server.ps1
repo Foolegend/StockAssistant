@@ -7,8 +7,9 @@ $BACK_ROOT = $PSScriptRoot
 # 2. 设置 PYTHONPATH，确保 python 能找到 src 包
 $env:PYTHONPATH = $BACK_ROOT
 
-# 3. 定义虚拟环境中的 python 路径
-$PYTHON_EXE = "d:\project\StockAssistant\.venv\Scripts\python.exe"
+# 3. 定义虚拟环境中的 python 路径 (相对于项目根目录)
+$PROJECT_ROOT = Split-Path -Parent $BACK_ROOT
+$PYTHON_EXE = Join-Path $PROJECT_ROOT ".venv\Scripts\python.exe"
 
 # --- 新增：强制释放 8015 端口 ---
 Write-Host "🔍 检查并清理端口 8015..." -ForegroundColor Gray
