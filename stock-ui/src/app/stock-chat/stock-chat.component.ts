@@ -13,7 +13,7 @@ export class StockChatComponent implements OnInit {
 // ...existing code...
 
   // 用户输入的问题
-  userQuestion: string = '请分析一下股票000063，并简单说明它的投资价值。';
+  userQuestion: string = '你好';
   // 接收后端返回的答案
   chatAnswer: string = '';
   // 接口状态
