@@ -1,7 +1,7 @@
 import json
 import sys
 from ollama import chat
-from brain.McpBrainByPrompt import call_mcp_by_prompt
+from src.brain.McpBrainByPrompt import call_mcp_by_prompt
 
 MODLE_NAME = 'gpt-oss:120b-cloud'
 

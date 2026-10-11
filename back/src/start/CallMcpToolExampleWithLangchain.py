@@ -3,7 +3,7 @@ from langgraph.prebuilt import create_react_agent
 from langchain_openai import ChatOpenAI
 import os
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config", ".env"))
 
 model = ChatOpenAI(
     model=os.environ["CHAT_MODEL"],
@@ -17,7 +17,7 @@ async def run():
         {
             "mcpServerExample": {
                 "command": "python",
-                "args": [os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcpServer", "mcpServerExample.py")],
+                "args": [os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mcpServer", "mcpServerExample.py")],
                 "transport": "stdio"
             }
             # ,

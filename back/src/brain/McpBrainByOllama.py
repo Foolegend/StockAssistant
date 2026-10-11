@@ -1,18 +1,15 @@
 import json
+import os
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-import os
-from openai import OpenAI
-from dotenv import load_dotenv
+from ollama import ChatResponse, chat
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
-# 初始化OpenAI客户端
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_API_BASE"))
+MODLE_NAME = 'gpt-oss:120b-cloud'
 
 server_params = StdioServerParameters(
     command="python",  # 执行的命令（比如 python、node 等）
-    args=[os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcpServer", "mcpServerExample.py")]# 命令的参数（你的服务脚本路径）
+    args=[os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mcpServer", "mcpServerExample.py")]# 命令的参数（你的服务脚本路径）
 )
 async def build_openai_tools(tools_ori):
     tools = []
@@ -26,7 +23,7 @@ async def build_openai_tools(tools_ori):
             }
         })
     return tools
-async def call_mcp_by_openAI(user_input:str)->str:
+async def call_mcp_by_ollama(user_input:str)->str:
     # 保存对话历史
     messages = [
         {"role": "system", "content": "你是一个有帮助的助手，可以回答问题并调用工具获取信息。"}
@@ -42,16 +39,9 @@ async def call_mcp_by_openAI(user_input:str)->str:
             # 添加用户消息到历史
             messages.append({"role": "user", "content": user_input})
 
-            # 调用OpenAI API（第一次调用不使用流式输出）
-            response = client.chat.completions.create(
-                model=os.environ.get("CHAT_MODEL"),
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                # 不使用stream=True
-            )
+            response: ChatResponse = chat(MODLE_NAME, messages=messages, tools=tools)
             # print(response)
-            response_message = response.choices[0].message
+            response_message = response.message
             results = []
             if response_message.content:
                 results.append({"role": "system", "content": response_message.content})
@@ -63,7 +53,7 @@ async def call_mcp_by_openAI(user_input:str)->str:
                     # 处理每个工具调用
                     for tool_call in response_message.tool_calls:
                         function_name = tool_call.function.name
-                        function_args = json.loads(tool_call.function.arguments)
+                        function_args = dict(tool_call.function.arguments)
 
                         print(f"[系统] 调用函数: {function_name}({function_args})")
 
@@ -74,7 +64,6 @@ async def call_mcp_by_openAI(user_input:str)->str:
                         # 将函数调用结果添加到消息历史
                         results.append({
                             "role": "tool",
-                            "tool_id": tool_call.id,
                             "tool_name": function_name,
                             "content": json.dumps(response_str_list, ensure_ascii=False)
                         })
@@ -82,4 +71,5 @@ async def call_mcp_by_openAI(user_input:str)->str:
                         pass
             except:
                 pass
+            print(results)
             return json.dumps(results, ensure_ascii=False)

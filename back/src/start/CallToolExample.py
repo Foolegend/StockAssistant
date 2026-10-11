@@ -1,6 +1,6 @@
 import random
 from tools.ToolExample import get_conditions,get_temperature
-from brain.ToolBrainByOllama import call_multi_tools, call_single_tool
+from src.brain.ToolBrainByOllama import call_multi_tools, call_single_tool
 
 # available_functions = {
 #   'get_temperature': get_temperature,

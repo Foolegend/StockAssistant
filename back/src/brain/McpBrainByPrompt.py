@@ -7,7 +7,7 @@ from textwrap import dedent
 
 server_params = StdioServerParameters(
     command="python",  # 执行的命令（比如 python、node 等）
-    args=[os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcpServer", "mcpServerExample.py")]# 命令的参数（你的服务脚本路径）
+    args=[os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mcpServer", "mcpServerExample.py")]# 命令的参数（你的服务脚本路径）
 )
 MODLE_NAME = 'gpt-oss:120b-cloud'
 

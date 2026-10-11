@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from openai import OpenAI
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config", ".env"))
 # 初始化OpenAI客户端
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_API_BASE"))
 
@@ -42,7 +42,7 @@ llm = ChatOpenAI(
 checkpointer = MemorySaver()
 
 # 项目根路径(当前脚本所在目录)
-root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 print(f"当前脚本根路径: {root_dir}")
 
 # 技能根路径(指向skills目录)

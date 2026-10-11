@@ -21,26 +21,27 @@ export class Helloworld implements OnInit {
     this.callFastApi();
   }
 
-  // 调用 FastAPI POST 接口
+  // 调用 Agent Chat 接口
   callFastApi() {
-    const url = 'http://127.0.0.1:8000/posthello';
+    const url = 'http://127.0.0.1:8015/agent/chat';
 
-    // 要传给后端的 JSON 数据
     const postData = {
-      name: "Angular",
-      age: 18,
-      message: "I got you"
+      question: '请分析一下股票000063，并简单说明它的投资价值。',
+      model: 'gpt-oss:120b-cloud',
+      use_skills: true,
+      use_mcp: false,
+      thread_id: 'demo-angular'
     };
 
     this.http.post(url, postData).subscribe({
       next: (res) => {
         console.log('接口返回:', res);
         this.apiResult = res;
-        this.cdr.detectChanges(); // 手动触发变更检测
+        this.cdr.detectChanges();
       },
       error: (err) => {
         console.error('调用失败:', err);
-        this.cdr.detectChanges(); // 手动触发变更检测
+        this.cdr.detectChanges();
       }
     });
   }

@@ -3,7 +3,7 @@ import sys
 
 from ollama import chat
 
-from brain.McpBrainByOllama import call_mcp_by_ollama
+from src.brain.McpBrainByOllama import call_mcp_by_ollama
 
 MODLE_NAME = 'gpt-oss:120b-cloud'
 

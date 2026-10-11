@@ -10,7 +10,7 @@ from mcp.client.session import ClientSession
 # ======================
 MCP_SERVER_COMMAND = StdioServerParameters(
     command="python",  # 执行的命令（比如 python、node 等）
-    args=[os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcpServer", "mcpServerExample.py")]  # 命令的参数（你的服务脚本路径）
+    args=[os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mcpServer", "mcpServerExample.py")]  # 命令的参数（你的服务脚本路径）
 )
 
 async def main():

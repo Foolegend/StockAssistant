@@ -5,9 +5,9 @@ import sys
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from brain.McpBrainByOpenAI import call_mcp_by_openAI
+from src.brain.McpBrainByOpenAI import call_mcp_by_openAI
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config", ".env"))
 # 初始化OpenAI客户端
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_API_BASE"))
 
