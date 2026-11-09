@@ -1,6 +1,9 @@
+import hashlib
+import json
 import os
 import sys
 from dataclasses import dataclass
+from threading import RLock
 from typing import List, Optional, Sequence
 
 from deepagents import create_deep_agent
@@ -17,6 +20,8 @@ settings = get_settings()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ENV_PATH = settings["env_path"]
 DEFAULT_SKILLS_DIR = os.path.join(PROJECT_ROOT, "config", "skills")
+_AGENT_CACHE = {}
+_AGENT_CACHE_LOCK = RLock()
 
 load_dotenv(ENV_PATH)
 
@@ -34,7 +39,7 @@ def _normalize_path(path: Optional[str]) -> Optional[str]:
 class AgentConfig:
     model_name: Optional[str] = None
     skill_dirs: Optional[List[str]] = None
-    mcp_servers: Optional[List[str]] = None
+    mcp_servers: Optional[List[dict | str]] = None
     system_prompt: Optional[str] = None
     temperature: float = 0.2
     debug: bool = False
@@ -79,7 +84,7 @@ def make_llm(model_name: Optional[str] = None, temperature: float = 0.2):
     )
 
 
-def load_mcp_tools_from_servers(mcp_servers: Sequence[str]) -> list:
+def load_mcp_tools_from_servers(mcp_servers: Sequence[dict | str]) -> list:
     return load_mcp_tools_for_agent(mcp_servers)
 
 
@@ -134,8 +139,28 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
     return agent
 
 
+def _cached_agent(config: Optional[AgentConfig]):
+    cfg = config or AgentConfig()
+    cache_data = {
+        "model_name": cfg.model_name,
+        "skill_dirs": cfg.skill_dirs,
+        "mcp_servers": cfg.mcp_servers,
+        "system_prompt": cfg.system_prompt,
+        "temperature": cfg.temperature,
+        "debug": cfg.debug,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(cache_data, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+    with _AGENT_CACHE_LOCK:
+        if fingerprint not in _AGENT_CACHE:
+            _AGENT_CACHE[fingerprint] = build_agent(cfg)
+        return _AGENT_CACHE[fingerprint]
+
+
 def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: str = "default") -> str:
-    agent = build_agent(config)
+    agent = _cached_agent(config)
     result = agent.invoke(
         {"messages": [{"role": "user", "content": question}]},
         config={"configurable": {"thread_id": thread_id}},

@@ -1,10 +1,35 @@
 <div class="box">
-  <h2>StockAssistant Agent 演示</h2>
+  <h2>StockAssistant 智能体</h2>
 
   <div class="chat-container">
+    <div *ngIf="catalogError" class="error">
+      {{ catalogError }}
+    </div>
+
+    <div *ngIf="agents.length" class="agent-options">
+      <label>
+        智能体
+        <select [(ngModel)]="selectedAgentId" (ngModelChange)="onAgentChange()">
+          <option *ngFor="let agent of agents" [ngValue]="agent.id">
+            {{ agent.name }}
+          </option>
+        </select>
+      </label>
+      <span class="agent-description">{{ selectedAgentDescription }}</span>
+      <label>
+        命令
+        <select [(ngModel)]="selectedCommandId">
+          <option *ngFor="let command of availableCommands" [ngValue]="command.id">
+            {{ command.name }}
+          </option>
+        </select>
+      </label>
+      <span class="agent-description">{{ selectedCommandDescription }}</span>
+    </div>
+
     <div class="input-group">
       <input [(ngModel)]="userQuestion" placeholder="请输入问题..." />
-      <button (click)="sendChat()">发送</button>
+      <button (click)="sendChat()" [disabled]="isLoading || !selectedAgentId || !selectedCommandId">发送</button>
     </div>
 
     <div *ngIf="isLoading" class="status">

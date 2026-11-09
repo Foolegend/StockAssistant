@@ -1,10 +1,14 @@
-from fastapi import FastAPI
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from src.agent.UnifiedAgent import AgentConfig, ask_agent
+from src.agent.UnifiedAgent import AgentConfig, ask_agent, default_system_prompt
+from src.services.extension_registry import ExtensionRegistry
 
 app = FastAPI(title="StockAssistant Agent")
+extension_registry = ExtensionRegistry()
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,24 +31,30 @@ def hello():
 
 class AgentChatRequest(BaseModel):
     question: str = Field(..., description="用户提问")
-    model: str | None = Field(default=None, description="可选模型，例如 gpt-oss:120b-cloud")
-    use_skills: bool = Field(default=True, description="是否加载 skills")
-    skill_dirs: list[str] | None = Field(default=None, description="自定义 skill 路径列表")
-    use_mcp: bool = Field(default=False, description="是否加载 MCP tools")
-    mcp_servers: list[str] | None = Field(default=None, description="MCP server 脚本路径列表")
-    thread_id: str = Field(default="default")
+    agent_id: str | None = Field(default=None, description="已注册 Agent 的 ID")
+    command_id: str | None = Field(default=None, description="已注册 Command 的 ID")
+    thread_id: str = Field(default_factory=lambda: str(uuid4()))
+
+
+@app.get("/agent/catalog")
+def agent_catalog():
+    return {
+        "code": 0,
+        "message": "success",
+        "data": extension_registry.catalog(),
+    }
 
 
 @app.post("/agent/chat")
 def agent_chat(req: AgentChatRequest):
-    skill_dirs = req.skill_dirs if req.use_skills else []
-    mcp_servers = req.mcp_servers if req.use_mcp else []
+    try:
+        agent, command = extension_registry.resolve(req.agent_id, req.command_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
-    config = AgentConfig(
-        model_name=req.model,
-        skill_dirs=skill_dirs,
-        mcp_servers=mcp_servers,
-    )
+    config = AgentConfig(**extension_registry.agent_runtime_config(agent, command, default_system_prompt()))
 
     answer = ask_agent(req.question, config=config, thread_id=req.thread_id)
     return {
@@ -52,9 +62,9 @@ def agent_chat(req: AgentChatRequest):
         "message": "success",
         "data": {
             "answer": answer,
-            "model": req.model,
-            "use_skills": req.use_skills,
-            "use_mcp": req.use_mcp,
+            "agent_id": agent["id"],
+            "command_id": command["id"],
+            "model": config.model_name,
             "thread_id": req.thread_id,
         },
     }

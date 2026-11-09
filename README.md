@@ -6,7 +6,7 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 
 ### 1. 后端 (stock-server)
 基于 **FastAPI** 构建，核心逻辑由 `UnifiedAgent` 驱动。
-- **Agent 核心**：支持动态加载 Skills 和 MCP 工具。
+- **Agent 核心**：从服务端扩展目录发现 Agent、Command、Skills 和 MCP Servers；前端通过人类可读名称选择，API 使用注册 ID 定位扩展。
 - **Brain 层**：提供多种 LLM 适配器（Ollama, OpenAI 等）。
 - **Skill 系统**：
   - `stock-analysis`: 股票数据抓取与技术指标分析。
@@ -19,6 +19,37 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 基于 **Angular** 构建的现代化聊天界面。
 - **实时交互**：通过 REST API 与后端 Agent 通信。
 - **响应式设计**：适配不同设备，提供专业且简洁的 AI 聊天体验。
+
+---
+
+## 🧩 扩展智能体
+
+- `stock-server/config/agents.json`：定义 Agent、可用 Skill/MCP 和默认 Agent。
+- `stock-server/config/commands.json`：定义聊天命令、说明和附加指令。
+- `stock-server/config/mcp_servers.json`：注册可信的 MCP stdio server；默认不启动任何 MCP server。
+- `stock-server/config/skills/<skill-id>/SKILL.md`：添加 Skill 后，后端自动发现其名称和说明。
+
+前端加载 `GET /agent/catalog` 展示 Agent 和命令名称，再将选中的注册 ID 发送到 `POST /agent/chat`。用户不需要知道或手动输入 ID；服务端不接受客户端传入本地 Skill 路径或 MCP 启动命令。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
+
+MCP server 示例（放入 `mcp_servers.json` 的 `servers` 数组）：
+
+```json
+{
+  "id": "local-weather",
+  "name": "本地天气工具",
+  "description": "查询天气",
+  "command": "node",
+  "args": ["mcp/weather-server.js"],
+  "cwd": ".",
+  "env": {
+    "WEATHER_API_KEY": "${WEATHER_API_KEY}"
+  }
+}
+```
+
+然后在 Agent 的 `mcp_server_ids` 中引用 `"local-weather"`。MCP 配置是可信的服务端代码执行配置，只应注册经过审查的 server。
+
+修改 JSON 扩展配置后重启后端。当前会话检查点保存在进程内存中，后端重启会清空；跨重启的数据库持久化可作为后续扩展。
 
 ---
 

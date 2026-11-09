@@ -1,0 +1,26 @@
+{
+  "default_agent_id": "stock-assistant",
+  "agents": [
+    {
+      "id": "stock-assistant",
+      "name": "StockAssistant",
+      "description": "股票、文档和通用问题助手。",
+      "skill_ids": [
+        "stock-analysis",
+        "doc-handler",
+        "docx-cn",
+        "weather"
+      ],
+      "mcp_server_ids": []
+    },
+    {
+      "id": "stock-analyst",
+      "name": "股票分析师",
+      "description": "聚焦 A 股、港股和美股的行情与技术分析。",
+      "skill_ids": [
+        "stock-analysis"
+      ],
+      "mcp_server_ids": []
+    }
+  ]
+}

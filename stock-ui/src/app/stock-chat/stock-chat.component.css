@@ -11,3 +11,20 @@
   background: #fff;
   border-left: 4px solid #1976d2;
 }
+
+.agent-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.agent-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-description {
+  color: #555;
+}
