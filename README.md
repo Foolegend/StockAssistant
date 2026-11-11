@@ -123,6 +123,6 @@ npm install
 ## 📁 目录结构
 - `stock-server/`: 后端核心代码
   - `src/`: 源代码 (api, agent, brain, services)
-  - `config/skills/`: 定义的各种 AI 技能
+  - `.github/skills/`: 定义的各种 AI 技能
 - `stock-ui/`: 前端界面代码
 - `.venv/`: Python 虚拟环境

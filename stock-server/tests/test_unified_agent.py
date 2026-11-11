@@ -12,7 +12,7 @@ from src.agent.UnifiedAgent import AgentConfig, build_agent
 
 class UnifiedAgentTests(unittest.TestCase):
     def test_agent_config_accepts_model_and_components(self):
-        skill_dir = Path(__file__).resolve().parents[1] / "config" / "skills" / "stock-analysis"
+        skill_dir = Path(__file__).resolve().parents[2] / ".github" / "skills" / "stock-analysis"
         config = AgentConfig(
             model_name="gpt-oss:120b-cloud",
             skill_dirs=[str(skill_dir)],

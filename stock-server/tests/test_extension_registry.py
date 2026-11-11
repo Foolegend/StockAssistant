@@ -281,7 +281,7 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(response["data"]["answer"], "分析完成")
         self.assertEqual(response["data"]["agent_id"], "stock-analyst")
         self.assertEqual(response["data"]["command_id"], "stock-analysis")
-        self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith("config\\skills"))
+        self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(".github\\skills"))
         self.assertEqual(
             [call.args[0] for call in run_hook.call_args_list],
             ["before_agent", "after_agent"],

@@ -19,7 +19,7 @@ from src.mcp.client import load_mcp_tools_for_agent
 settings = get_settings()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ENV_PATH = settings["env_path"]
-DEFAULT_SKILLS_DIR = os.path.join(PROJECT_ROOT, "config", "skills")
+DEFAULT_SKILLS_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "..", ".github", "skills"))
 _AGENT_CACHE = {}
 _AGENT_CACHE_LOCK = RLock()
 
@@ -127,7 +127,7 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
         env={
             **os.environ.copy(),
             "PYTHONHASHSEED": "0",
-            "SKILL_ROOT": os.path.join(project_root, ".claude", "skills"),
+            "SKILL_ROOT": DEFAULT_SKILLS_DIR,
             "CLAUDE_PROJECT_DIR": project_root,
             "PYTHON_EXEC": sys.executable,
         },

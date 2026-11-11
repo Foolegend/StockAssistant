@@ -9,7 +9,7 @@ import yaml
 
 SERVER_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ROOT = SERVER_ROOT / "config"
-SKILLS_ROOT = CONFIG_ROOT / "skills"
+SKILLS_ROOT = SERVER_ROOT.parent / ".github" / "skills"
 _EXTENSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _CLAUDE_RUNTIME_GUIDANCE = """
 ## Claude Code definition compatibility
