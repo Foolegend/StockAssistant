@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from src.api.chat import AgentChatRequest, agent_chat, agent_catalog
 from src.services.extension_registry import ExtensionRegistry
+from src.services.hook_runner import HookExecutionError, HookRunner
 
 
 class ExtensionRegistryTests(unittest.TestCase):
@@ -78,6 +79,8 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(catalog["agents"][0]["name"], "Assistant")
         self.assertEqual(catalog["agents"][0]["skills"][0]["id"], "sample-skill")
         self.assertEqual(catalog["commands"][0]["name"], "Chat")
+        self.assertEqual(catalog["mcp_servers"][0]["id"], "local-tools")
+        self.assertEqual(catalog["skills"][0]["id"], "sample-skill")
 
     def test_runtime_config_resolves_only_server_registered_components(self):
         registry = ExtensionRegistry(self.config_root, self.skills_root)
@@ -85,7 +88,7 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         runtime = registry.agent_runtime_config(agent, command, "Base instructions.")
 
-        self.assertEqual(runtime["skill_dirs"], [str((self.skills_root / "sample-skill").resolve())])
+        self.assertEqual(runtime["skill_dirs"], [str(self.skills_root.resolve())])
         self.assertEqual(runtime["mcp_servers"][0]["id"], "local-tools")
         self.assertIn("Base instructions.", runtime["system_prompt"])
         self.assertIn("Answer clearly.", runtime["system_prompt"])
@@ -115,6 +118,148 @@ class ExtensionRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown skill"):
             ExtensionRegistry(self.config_root, self.skills_root)
 
+    def test_registered_hooks_are_validated_and_listed_without_command_details(self):
+        self.write_config(
+            "hooks.json",
+            {
+                "hooks": [
+                    {
+                        "id": "audit-chat",
+                        "name": "Audit chat",
+                        "event": "before_agent",
+                        "command": ["python", "scripts/audit.py"],
+                        "agent_ids": ["assistant"],
+                        "command_ids": ["chat"],
+                    }
+                ]
+            },
+        )
+
+        registry = ExtensionRegistry(self.config_root, self.skills_root)
+
+        self.assertEqual(registry.hooks["audit-chat"]["event"], "before_agent")
+        self.assertEqual(
+            registry.catalog()["hooks"],
+            [{"id": "audit-chat", "name": "Audit chat", "event": "before_agent", "enabled": True}],
+        )
+
+    def test_hook_rejects_unknown_agent_reference(self):
+        self.write_config(
+            "hooks.json",
+            {
+                "hooks": [
+                    {
+                        "id": "audit-chat",
+                        "name": "Audit chat",
+                        "event": "before_agent",
+                        "command": ["python", "scripts/audit.py"],
+                        "agent_ids": ["missing"],
+                    }
+                ]
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown agent_id"):
+            ExtensionRegistry(self.config_root, self.skills_root)
+
+    def test_hook_runner_passes_json_context_and_uses_registered_filters(self):
+        output_path = self.root / "hook-context.json"
+        script = (
+            "import json, pathlib, sys; "
+            "pathlib.Path(sys.argv[1]).write_text(json.dumps(json.load(sys.stdin)))"
+        )
+        runner = HookRunner(
+            {
+                "audit-chat": {
+                    "event": "after_agent",
+                    "command": [sys.executable, "-c", script, str(output_path)],
+                    "agent_ids": ["assistant"],
+                    "command_ids": ["chat"],
+                    "timeout_seconds": 5,
+                }
+            },
+            str(self.root),
+        )
+
+        runner.run(
+            "after_agent",
+            {"question": "hello", "answer": "world"},
+            agent_id="assistant",
+            command_id="chat",
+        )
+
+        self.assertEqual(
+            json.loads(output_path.read_text(encoding="utf-8")),
+            {"question": "hello", "answer": "world", "event": "after_agent"},
+        )
+
+    def test_hook_runner_surfaces_nonzero_exit(self):
+        runner = HookRunner(
+            {
+                "failing-hook": {
+                    "event": "before_agent",
+                    "command": [sys.executable, "-c", "raise SystemExit(3)"],
+                }
+            },
+            str(self.root),
+        )
+
+        with self.assertRaisesRegex(HookExecutionError, "exited with code 3"):
+            runner.run(
+                "before_agent",
+                {},
+                agent_id="assistant",
+                command_id="chat",
+            )
+
+    def test_discovers_claude_code_definitions_and_nested_skills(self):
+        claude_root = self.root / "project" / ".claude"
+        agents_dir = claude_root / "agents"
+        commands_dir = claude_root / "commands" / "workflows"
+        skill_dir = claude_root / "skills" / "group" / "nested"
+        agents_dir.mkdir(parents=True)
+        commands_dir.mkdir(parents=True)
+        skill_dir.mkdir(parents=True)
+        (agents_dir / "helper.md").write_text(
+            "---\nname: helper-agent\ndescription: A helper agent.\nskills:\n  - group/nested\n---\nHelp with focused tasks.\n",
+            encoding="utf-8",
+        )
+        (commands_dir / "run.md").write_text(
+            "---\ndescription: Run a workflow.\nargument-hint: [topic]\n---\nWork on $ARGUMENTS.\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: nested-skill\ndescription: A nested skill.\n---\n# Skill\n",
+            encoding="utf-8",
+        )
+        self.write_config(
+            "extension_sources.json",
+            {"claude_config_dirs": [str(claude_root)]},
+        )
+
+        registry = ExtensionRegistry(self.config_root, self.skills_root)
+
+        agent, command = registry.resolve("helper-agent", "workflows/run")
+        runtime = registry.agent_runtime_config(agent, command)
+
+        self.assertEqual(agent["prompt"], "Help with focused tasks.")
+        self.assertEqual(command["name"], "/workflows/run")
+        self.assertIn("Work on Analyze the project.", registry.command_input(command, "Analyze the project."))
+        self.assertIn(str((claude_root / "skills" / "group").resolve()), runtime["skill_dirs"])
+        self.assertEqual(runtime["project_root"], str(claude_root.parent))
+        self.assertIn("task", runtime["system_prompt"])
+
+    def test_configured_claude_catalog_discovers_target_directory(self):
+        registry = ExtensionRegistry()
+
+        catalog = registry.catalog()
+
+        self.assertIn("weather-agent", [agent["id"] for agent in catalog["agents"]])
+        self.assertIn("time-command", [command["id"] for command in catalog["commands"]])
+        self.assertIn("weather-fetcher", [
+            skill["id"] for agent in catalog["agents"] for skill in agent["skills"]
+        ])
+
     def test_api_catalog_returns_registered_display_options(self):
         response = agent_catalog()
 
@@ -128,13 +273,33 @@ class ExtensionRegistryTests(unittest.TestCase):
             command_id="stock-analysis",
         )
 
-        with patch("src.api.chat.ask_agent", return_value="分析完成") as ask_agent:
+        with patch("src.api.chat.ask_agent", return_value="分析完成") as ask_agent, patch(
+            "src.api.chat.hook_runner.run"
+        ) as run_hook:
             response = agent_chat(request)
 
         self.assertEqual(response["data"]["answer"], "分析完成")
         self.assertEqual(response["data"]["agent_id"], "stock-analyst")
         self.assertEqual(response["data"]["command_id"], "stock-analysis")
-        self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith("stock-analysis"))
+        self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith("config\\skills"))
+        self.assertEqual(
+            [call.args[0] for call in run_hook.call_args_list],
+            ["before_agent", "after_agent"],
+        )
+
+    def test_api_runs_error_hook_when_agent_fails(self):
+        request = AgentChatRequest(question="hello")
+
+        with patch("src.api.chat.ask_agent", side_effect=RuntimeError("agent failed")), patch(
+            "src.api.chat.hook_runner.run"
+        ) as run_hook:
+            with self.assertRaisesRegex(RuntimeError, "agent failed"):
+                agent_chat(request)
+
+        self.assertEqual(
+            [call.args[0] for call in run_hook.call_args_list],
+            ["before_agent", "on_error"],
+        )
 
     def test_api_rejects_unknown_agent(self):
         request = AgentChatRequest(question="hello", agent_id="not-registered")

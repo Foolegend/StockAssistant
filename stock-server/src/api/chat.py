@@ -6,9 +6,11 @@ from pydantic import BaseModel, Field
 
 from src.agent.UnifiedAgent import AgentConfig, ask_agent, default_system_prompt
 from src.services.extension_registry import ExtensionRegistry
+from src.services.hook_runner import HookExecutionError, HookRunner
 
 app = FastAPI(title="StockAssistant Agent")
 extension_registry = ExtensionRegistry()
+hook_runner = HookRunner(extension_registry.hooks, str(extension_registry.config_root.parent))
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,7 +58,44 @@ def agent_chat(req: AgentChatRequest):
 
     config = AgentConfig(**extension_registry.agent_runtime_config(agent, command, default_system_prompt()))
 
-    answer = ask_agent(req.question, config=config, thread_id=req.thread_id)
+    question = extension_registry.command_input(command, req.question)
+    hook_context = {
+        "question": req.question,
+        "agent_id": agent["id"],
+        "command_id": command["id"],
+        "thread_id": req.thread_id,
+    }
+    try:
+        hook_runner.run(
+            "before_agent",
+            hook_context,
+            agent_id=agent["id"],
+            command_id=command["id"],
+        )
+        answer = ask_agent(question, config=config, thread_id=req.thread_id)
+        hook_runner.run(
+            "after_agent",
+            {**hook_context, "answer": answer},
+            agent_id=agent["id"],
+            command_id=command["id"],
+        )
+    except Exception as error:
+        try:
+            hook_runner.run(
+                "on_error",
+                {**hook_context, "error": str(error)},
+                agent_id=agent["id"],
+                command_id=command["id"],
+            )
+        except HookExecutionError as hook_error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"{error}; on_error hook failed: {hook_error}",
+            ) from error
+        if isinstance(error, HookExecutionError):
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        raise
+
     return {
         "code": 0,
         "message": "success",

@@ -24,12 +24,39 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 
 ## 🧩 扩展智能体
 
-- `stock-server/config/agents.json`：定义 Agent、可用 Skill/MCP 和默认 Agent。
-- `stock-server/config/commands.json`：定义聊天命令、说明和附加指令。
+- `stock-server/config/extension_sources.json`：指定 Claude Code `.claude` 扩展目录；也可用 `CLAUDE_CONFIG_DIR` 环境变量覆盖。
+- `.claude/agents/**/*.md`：自动发现 Agent，并注册为可选 Agent 和可委派子 Agent。
+- `.claude/commands/**/*.md`：自动发现 Command；默认名称为 `/命令路径`（可由 frontmatter 的 `name` 覆盖），正文作为工作流指令执行，`$ARGUMENTS` 会替换为用户输入。
+- `.claude/skills/**/SKILL.md`：递归发现 Claude Code Skill，按 DeepAgents Skills middleware 加载；支持 Skill 子目录。
+- `stock-server/config/agents.json`：保留 StockAssistant 自带 Agent、Skill/MCP 关联和默认 Agent。
+- `stock-server/config/commands.json`：保留 StockAssistant 自带命令和默认命令。
 - `stock-server/config/mcp_servers.json`：注册可信的 MCP stdio server；默认不启动任何 MCP server。
-- `stock-server/config/skills/<skill-id>/SKILL.md`：添加 Skill 后，后端自动发现其名称和说明。
+- `stock-server/config/hooks.json`：注册由服务端显式批准的本地生命周期 hooks；默认不执行任何 hook。
 
-前端加载 `GET /agent/catalog` 展示 Agent 和命令名称，再将选中的注册 ID 发送到 `POST /agent/chat`。用户不需要知道或手动输入 ID；服务端不接受客户端传入本地 Skill 路径或 MCP 启动命令。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
+前端加载 `GET /agent/catalog` 展示 Agent、Command、Skill、MCP 和 Hook 的已注册信息，再将选中的 Agent/Command ID 发送到 `POST /agent/chat`。用户不需要知道或手动输入 ID；服务端不接受客户端传入本地 Skill 路径或 MCP 启动命令。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
+
+Claude Code 定义是 Markdown 指令，不是 Claude Code 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载，Command 正文作为本轮任务指令。外部定义内提及的工具只有在本平台实际配置后才能使用；Claude Code `settings.json`、hooks、memory 和权限配置不会导入或执行。MCP server 仍需在 StockAssistant 的 `mcp_servers.json` 里单独审核注册。
+
+Hook 使用 `hooks.json` 的 `hooks` 数组登记，支持 `before_agent`、`after_agent` 和 `on_error`。每项必须包含唯一 `id`、`name`、`event` 和 argv 数组形式的 `command`，可用 `agent_ids` / `command_ids` 限定范围，以及 `timeout_seconds` 设置大于 0、最多 120 秒的运行时限。示例：
+
+```json
+{
+  "hooks": [
+    {
+      "id": "audit-chat",
+      "name": "审计对话",
+      "event": "before_agent",
+      "command": ["python", "scripts/audit_chat.py"],
+      "agent_ids": ["stock-assistant"],
+      "timeout_seconds": 10
+    }
+  ]
+}
+```
+
+Hook 以无 shell 的子进程运行，工作目录为 `stock-server`，继承后端环境变量；JSON 事件上下文通过 stdin 传递（包含用户问题，成功后事件还包含回答）。成功时 stdout 不作为 Agent 指令使用；非零退出或超时会使本次请求失败。不会自动导入或执行 `.claude/settings.json` 中的 hook 命令。Hook 能读取继承的环境变量并以服务端身份运行，只登记可信脚本，并在改动配置后重启后端。
+
+外部 Agent frontmatter 中的模型选择目前不映射到 Claude 模型；运行模型由 `stock-server/config/.env` 中的 `CHAT_MODEL` 决定。修改 `.claude` 文件或扩展源配置后需重启后端以重新扫描。
 
 MCP server 示例（放入 `mcp_servers.json` 的 `servers` 数组）：
 
@@ -67,7 +94,7 @@ cd stock-server
 # & "..\.venv\Scripts\Activate.ps1"
 
 # 执行一键启动脚本
-.\start_backend.ps1
+.\start_server.ps1
 ```
 后端服务将运行在: `http://127.0.0.1:8015`
 
@@ -78,7 +105,7 @@ cd stock-ui
 npm install
 
 # 启动开发服务器
-.\start_frontend.ps1
+.\start_ui.ps1
 ```
 前端界面访问: `http://localhost:4200`
 

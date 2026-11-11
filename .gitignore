@@ -162,3 +162,4 @@ cython_debug/
 # Temporary files
 stock-server/tmp/
 /tmp/
+.vscode/

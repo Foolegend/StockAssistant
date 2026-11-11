@@ -41,12 +41,16 @@ class AgentConfig:
     skill_dirs: Optional[List[str]] = None
     mcp_servers: Optional[List[dict | str]] = None
     system_prompt: Optional[str] = None
+    project_root: Optional[str] = None
+    subagents: Optional[List[dict]] = None
     temperature: float = 0.2
     debug: bool = False
 
     def __post_init__(self):
-        self.skill_dirs = self._normalize_list(self.skill_dirs)
-        self.mcp_servers = self._normalize_list(self.mcp_servers)
+        if self.skill_dirs is not None:
+            self.skill_dirs = self._normalize_list(self.skill_dirs)
+        if self.mcp_servers is not None:
+            self.mcp_servers = self._normalize_list(self.mcp_servers)
 
     @staticmethod
     def _normalize_list(value):
@@ -89,15 +93,18 @@ def load_mcp_tools_from_servers(mcp_servers: Sequence[dict | str]) -> list:
 
 
 def ensure_skill_dirs(skill_dirs: Optional[Sequence[str]] = None) -> list[str]:
-    configured = list(skill_dirs or [])
-    if not configured and os.path.isdir(DEFAULT_SKILLS_DIR):
+    configured = list(skill_dirs) if skill_dirs is not None else []
+    if skill_dirs is None and os.path.isdir(DEFAULT_SKILLS_DIR):
         configured = [DEFAULT_SKILLS_DIR]
 
     normalized = []
     for skill_dir in configured:
         candidate = _normalize_path(skill_dir)
-        if candidate and os.path.isdir(candidate):
-            normalized.append(candidate)
+        if candidate is None:
+            raise ValueError("Skill directories must be non-empty paths")
+        if not os.path.isdir(candidate):
+            raise FileNotFoundError(f"Skill directory does not exist: {candidate}")
+        normalized.append(os.path.abspath(candidate))
 
     return normalized
 
@@ -113,13 +120,15 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
 
     skill_dirs = ensure_skill_dirs(cfg.skill_dirs)
     mcp_tools = load_mcp_tools_from_servers(cfg.mcp_servers)
+    project_root = _normalize_path(cfg.project_root) or PROJECT_ROOT
 
     backend = LocalShellBackend(
-        root_dir=PROJECT_ROOT,
+        root_dir=project_root,
         env={
             **os.environ.copy(),
             "PYTHONHASHSEED": "0",
-            "SKILL_ROOT": os.path.join(PROJECT_ROOT, "config", "skills"),
+            "SKILL_ROOT": os.path.join(project_root, ".claude", "skills"),
+            "CLAUDE_PROJECT_DIR": project_root,
             "PYTHON_EXEC": sys.executable,
         },
         virtual_mode=True,
@@ -130,7 +139,8 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
     agent = create_deep_agent(
         model=llm,
         tools=mcp_tools,
-        skills=skill_dirs or None,
+        skills=skill_dirs,
+        subagents=cfg.subagents or None,
         backend=backend,
         system_prompt=cfg.system_prompt or default_system_prompt(),
         checkpointer=MemorySaver(),
@@ -146,6 +156,8 @@ def _cached_agent(config: Optional[AgentConfig]):
         "skill_dirs": cfg.skill_dirs,
         "mcp_servers": cfg.mcp_servers,
         "system_prompt": cfg.system_prompt,
+        "project_root": cfg.project_root,
+        "subagents": cfg.subagents,
         "temperature": cfg.temperature,
         "debug": cfg.debug,
     }
