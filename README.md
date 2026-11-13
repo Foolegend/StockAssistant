@@ -114,7 +114,13 @@ npm install
 
 ## ⚙️ 配置说明
 
-后端配置文件位于 `stock-server/config/.env`：
+首次配置时，将模板复制为 `stock-server/config/.env`，再按需修改：
+
+```powershell
+Copy-Item stock-server\config\.env.template stock-server\config\.env
+```
+
+`.env` 不纳入 Git；提交时只提交 `.env.template`。配置项如下：
 - `OPENAI_API_KEY`: 你的 API Key（使用 Ollama 时可填任意字符）。
 - `OPENAI_API_BASE`: API 基础路径（如 `http://localhost:11434/v1`）。
 - `CHAT_MODEL`: 默认使用的模型名称（如 `gpt-oss:120b-cloud` 或 `qwen3:4b`）。
