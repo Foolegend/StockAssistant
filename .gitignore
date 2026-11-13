@@ -164,3 +164,4 @@ cython_debug/
 stock-server/tmp/
 /tmp/
 .vscode/
+stock-server/config/.env

@@ -21,7 +21,7 @@ interface AgentCatalog {
   agents: AgentOption[];
   commands: CommandOption[];
   default_agent_id: string;
-  default_command_id: string;
+  default_command_id: string | null;
 }
 
 @Component({
@@ -76,7 +76,10 @@ export class StockChatComponent implements OnInit {
         this.agents = res.data.agents;
         this.commands = res.data.commands;
         this.selectedAgentId = res.data.default_agent_id;
-        this.selectedCommandId = res.data.default_command_id;
+        this.selectedCommandId = res.data.default_command_id ?? '';
+        if (!this.selectedCommandId && this.availableCommands.length) {
+          this.selectedCommandId = this.availableCommands[0].id;
+        }
         this.cdr.detectChanges();
       },
       error: () => {
@@ -87,7 +90,7 @@ export class StockChatComponent implements OnInit {
   }
 
   sendChat(): void {
-    if (!this.selectedAgentId || !this.selectedCommandId || !this.userQuestion.trim()) {
+    if (!this.selectedAgentId || !this.userQuestion.trim()) {
       return;
     }
 
@@ -98,7 +101,7 @@ export class StockChatComponent implements OnInit {
     const postData = {
       question: this.userQuestion,
       agent_id: this.selectedAgentId,
-      command_id: this.selectedCommandId,
+      command_id: this.selectedCommandId || null,
       thread_id: this.threadId,
     };
 

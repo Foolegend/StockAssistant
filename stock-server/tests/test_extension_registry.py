@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from fastapi import HTTPException
 
-from src.api.chat import AgentChatRequest, agent_chat, agent_catalog
+from src.api.chat import AgentChatRequest, agent_chat, agent_catalog, extension_registry
 from src.services.extension_registry import ExtensionRegistry
 from src.services.hook_runner import HookExecutionError, HookRunner
 
@@ -20,38 +20,26 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.config_root = self.root / "config"
-        self.skills_root = self.config_root / "skills"
+        self.config_root.mkdir(parents=True)
+        self.skills_root = self.root / ".github" / "skills"
         self.skills_root.mkdir(parents=True)
-        skill_dir = self.skills_root / "sample-skill"
-        skill_dir.mkdir()
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: sample-skill\ndescription: |\n  A test skill.\n  It has two lines.\n---\n# Sample\n",
+        default_command = self.root / ".claude" / "commands" / "chat.md"
+        default_command.parent.mkdir(parents=True)
+        default_command.write_text(
+            "---\nname: Chat\ndescription: General chat.\n---\nAnswer clearly.\n",
             encoding="utf-8",
         )
-        self.write_config(
-            "agents.json",
-            {
-                "default_agent_id": "assistant",
-                "agents": [
-                    {
-                        "id": "assistant",
-                        "name": "Assistant",
-                        "skill_ids": ["sample-skill"],
-                        "mcp_server_ids": ["local-tools"],
-                    }
-                ],
-            },
+        agents_dir = self.root / ".github" / "agents"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "assistant.md").write_text(
+            "---\nname: assistant\ndisplay_name: Assistant\ndefault: true\n"
+            "skills: [sample-skill]\nmcp_server_ids: [local-tools]\n---\n",
+            encoding="utf-8",
         )
-        self.write_config(
-            "commands.json",
-            {
-                "default_command_id": "chat",
-                "commands": [{"id": "chat", "name": "Chat", "instruction": "Answer clearly."}],
-            },
-        )
-        self.write_config(
-            "mcp_servers.json",
-            {
+        mcp_dir = self.root / ".github" / "mcp"
+        mcp_dir.mkdir(parents=True)
+        (mcp_dir / "local-tools.json").write_text(
+            json.dumps({
                 "servers": [
                     {
                         "id": "local-tools",
@@ -61,9 +49,15 @@ class ExtensionRegistryTests(unittest.TestCase):
                         "env": {"API_KEY": "${LOCAL_TOOLS_KEY}"},
                     }
                 ]
-            },
+            }),
+            encoding="utf-8",
         )
-
+        skill_dir = self.skills_root / "sample-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: sample-skill\ndescription: |\n  A test skill.\n  It has two lines.\n---\n# Sample\n",
+            encoding="utf-8",
+        )
     def tearDown(self):
         self.temp_dir.cleanup()
 
@@ -71,11 +65,12 @@ class ExtensionRegistryTests(unittest.TestCase):
         (self.config_root / name).write_text(json.dumps(content), encoding="utf-8")
 
     def test_catalog_uses_display_names_and_registered_ids(self):
-        registry = ExtensionRegistry(self.config_root, self.skills_root)
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
         catalog = registry.catalog()
 
         self.assertEqual(catalog["default_agent_id"], "assistant")
+        self.assertEqual(catalog["default_command_id"], "chat")
         self.assertEqual(catalog["agents"][0]["name"], "Assistant")
         self.assertEqual(catalog["agents"][0]["skills"][0]["id"], "sample-skill")
         self.assertEqual(catalog["commands"][0]["name"], "Chat")
@@ -83,7 +78,7 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(catalog["skills"][0]["id"], "sample-skill")
 
     def test_runtime_config_resolves_only_server_registered_components(self):
-        registry = ExtensionRegistry(self.config_root, self.skills_root)
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
         agent, command = registry.resolve(None, None)
 
         runtime = registry.agent_runtime_config(agent, command, "Base instructions.")
@@ -91,37 +86,29 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(runtime["skill_dirs"], [str(self.skills_root.resolve())])
         self.assertEqual(runtime["mcp_servers"][0]["id"], "local-tools")
         self.assertIn("Base instructions.", runtime["system_prompt"])
-        self.assertIn("Answer clearly.", runtime["system_prompt"])
+        self.assertIn("Answer clearly.", registry.command_input(command, "hello"))
 
     def test_unknown_agent_is_rejected(self):
-        registry = ExtensionRegistry(self.config_root, self.skills_root)
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
         with self.assertRaises(KeyError):
             registry.resolve("not-registered", "chat")
 
     def test_unknown_skill_reference_fails_registry_initialization(self):
-        self.write_config(
-            "agents.json",
-            {
-                "default_agent_id": "assistant",
-                "agents": [
-                    {
-                        "id": "assistant",
-                        "name": "Assistant",
-                        "skill_ids": ["missing"],
-                        "mcp_server_ids": [],
-                    }
-                ],
-            },
+        (self.root / ".github" / "agents" / "assistant.md").write_text(
+            "---\nname: assistant\ndisplay_name: Assistant\ndefault: true\n"
+            "skills: [missing]\n---\n",
+            encoding="utf-8",
         )
 
         with self.assertRaisesRegex(ValueError, "unknown skill"):
-            ExtensionRegistry(self.config_root, self.skills_root)
+            ExtensionRegistry(self.config_root, project_root=self.root)
 
     def test_registered_hooks_are_validated_and_listed_without_command_details(self):
-        self.write_config(
-            "hooks.json",
-            {
+        hooks_dir = self.root / ".github" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "audit.json").write_text(
+            json.dumps({
                 "hooks": [
                     {
                         "id": "audit-chat",
@@ -132,10 +119,11 @@ class ExtensionRegistryTests(unittest.TestCase):
                         "command_ids": ["chat"],
                     }
                 ]
-            },
+            }),
+            encoding="utf-8",
         )
 
-        registry = ExtensionRegistry(self.config_root, self.skills_root)
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
         self.assertEqual(registry.hooks["audit-chat"]["event"], "before_agent")
         self.assertEqual(
@@ -144,9 +132,10 @@ class ExtensionRegistryTests(unittest.TestCase):
         )
 
     def test_hook_rejects_unknown_agent_reference(self):
-        self.write_config(
-            "hooks.json",
-            {
+        hooks_dir = self.root / ".cursor" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "audit.json").write_text(
+            json.dumps({
                 "hooks": [
                     {
                         "id": "audit-chat",
@@ -156,11 +145,12 @@ class ExtensionRegistryTests(unittest.TestCase):
                         "agent_ids": ["missing"],
                     }
                 ]
-            },
+            }),
+            encoding="utf-8",
         )
 
         with self.assertRaisesRegex(ValueError, "unknown agent_id"):
-            ExtensionRegistry(self.config_root, self.skills_root)
+            ExtensionRegistry(self.config_root, project_root=self.root)
 
     def test_hook_runner_passes_json_context_and_uses_registered_filters(self):
         output_path = self.root / "hook-context.json"
@@ -212,14 +202,22 @@ class ExtensionRegistryTests(unittest.TestCase):
                 command_id="chat",
             )
 
-    def test_discovers_claude_code_definitions_and_nested_skills(self):
-        claude_root = self.root / "project" / ".claude"
+    def test_discovers_project_definitions_across_supported_roots(self):
+        claude_root = self.root / ".claude"
         agents_dir = claude_root / "agents"
         commands_dir = claude_root / "commands" / "workflows"
         skill_dir = claude_root / "skills" / "group" / "nested"
+        github_root = self.root / ".github"
+        cursor_root = self.root / ".cursor"
         agents_dir.mkdir(parents=True)
         commands_dir.mkdir(parents=True)
         skill_dir.mkdir(parents=True)
+        (github_root / "agents").mkdir(parents=True, exist_ok=True)
+        (github_root / "commands").mkdir(parents=True)
+        (github_root / "mcp").mkdir(parents=True, exist_ok=True)
+        (claude_root / "hooks").mkdir(parents=True)
+        (cursor_root / "agents").mkdir(parents=True)
+        (cursor_root / "commands").mkdir(parents=True)
         (agents_dir / "helper.md").write_text(
             "---\nname: helper-agent\ndescription: A helper agent.\nskills:\n  - group/nested\n---\nHelp with focused tasks.\n",
             encoding="utf-8",
@@ -232,12 +230,60 @@ class ExtensionRegistryTests(unittest.TestCase):
             "---\nname: nested-skill\ndescription: A nested skill.\n---\n# Skill\n",
             encoding="utf-8",
         )
+        (github_root / "agents" / "github-helper.md").write_text(
+            "---\nname: github-helper\n---\nGitHub helper.\n",
+            encoding="utf-8",
+        )
+        (github_root / "commands" / "github-task.md").write_text(
+            "---\ndescription: GitHub command.\n---\nRun the GitHub task.\n",
+            encoding="utf-8",
+        )
+        (cursor_root / "agents" / "cursor-helper.md").write_text(
+            "---\nname: cursor-helper\n---\nCursor helper.\n",
+            encoding="utf-8",
+        )
+        (cursor_root / "commands" / "cursor-task.md").write_text(
+            "---\ndescription: Cursor command.\n---\nRun the Cursor task.\n",
+            encoding="utf-8",
+        )
+        (github_root / "mcp" / "tools.json").write_text(
+            json.dumps({
+                "servers": [
+                    {"id": "project-tools", "name": "Project tools", "command": "node"}
+                ]
+            }),
+            encoding="utf-8",
+        )
+        (claude_root / "hooks" / "audit.json").write_text(
+            json.dumps({
+                "hooks": [
+                    {
+                        "id": "project-audit",
+                        "name": "Project audit",
+                        "event": "before_agent",
+                        "command": ["python", "scripts/audit.py"],
+                    }
+                ]
+            }),
+            encoding="utf-8",
+        )
+        (claude_root / "hooks" / "hooks.json").write_text(
+            json.dumps({"hooks": {"PreToolUse": []}}),
+            encoding="utf-8",
+        )
+        external_root = self.root / "external"
+        (external_root / "agents").mkdir(parents=True)
+        (external_root / "agents" / "external.md").write_text(
+            "---\nname: external-agent\n---\nMust not be discovered.\n",
+            encoding="utf-8",
+        )
         self.write_config(
             "extension_sources.json",
-            {"claude_config_dirs": [str(claude_root)]},
+            {"claude_config_dirs": [str(external_root)]},
         )
 
-        registry = ExtensionRegistry(self.config_root, self.skills_root)
+        with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(external_root)}):
+            registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
         agent, command = registry.resolve("helper-agent", "workflows/run")
         runtime = registry.agent_runtime_config(agent, command)
@@ -246,19 +292,37 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(command["name"], "/workflows/run")
         self.assertIn("Work on Analyze the project.", registry.command_input(command, "Analyze the project."))
         self.assertIn(str((claude_root / "skills" / "group").resolve()), runtime["skill_dirs"])
-        self.assertEqual(runtime["project_root"], str(claude_root.parent))
+        self.assertEqual(runtime["project_root"], str(self.root))
         self.assertIn("task", runtime["system_prompt"])
+        self.assertIn("github-helper", registry.agents)
+        self.assertIn("cursor-helper", registry.agents)
+        self.assertIn("github-task", registry.commands)
+        self.assertIn("cursor-task", registry.commands)
+        self.assertIn("project-tools", registry.mcp_servers)
+        self.assertIn("project-audit", registry.hooks)
+        self.assertNotIn("external-agent", registry.agents)
 
-    def test_configured_claude_catalog_discovers_target_directory(self):
+    def test_default_registry_scans_project_root_skills(self):
         registry = ExtensionRegistry()
 
         catalog = registry.catalog()
 
-        self.assertIn("weather-agent", [agent["id"] for agent in catalog["agents"]])
-        self.assertIn("time-command", [command["id"] for command in catalog["commands"]])
-        self.assertIn("weather-fetcher", [
-            skill["id"] for agent in catalog["agents"] for skill in agent["skills"]
-        ])
+        self.assertIn("stock-analysis", [skill["id"] for skill in catalog["skills"]])
+        self.assertIn("stock-assistant", [agent["id"] for agent in catalog["agents"]])
+
+    def test_chat_works_without_project_commands(self):
+        (self.root / ".claude" / "commands" / "chat.md").unlink()
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        agent, command = registry.resolve(None, None)
+
+        self.assertIsNone(registry.default_command_id)
+        self.assertIsNone(command)
+        self.assertEqual(registry.command_input(command, "hello"), "hello")
+        self.assertEqual(
+            registry.agent_runtime_config(agent, command)["project_root"],
+            str(self.root),
+        )
 
     def test_api_catalog_returns_registered_display_options(self):
         response = agent_catalog()
@@ -268,9 +332,9 @@ class ExtensionRegistryTests(unittest.TestCase):
 
     def test_api_uses_registered_agent_and_command(self):
         request = AgentChatRequest(
-            question="分析 TSLA",
+            question="检查构建",
             agent_id="stock-analyst",
-            command_id="stock-analysis",
+            command_id=extension_registry.default_command_id,
         )
 
         with patch("src.api.chat.ask_agent", return_value="分析完成") as ask_agent, patch(
@@ -280,7 +344,7 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         self.assertEqual(response["data"]["answer"], "分析完成")
         self.assertEqual(response["data"]["agent_id"], "stock-analyst")
-        self.assertEqual(response["data"]["command_id"], "stock-analysis")
+        self.assertEqual(response["data"]["command_id"], extension_registry.default_command_id)
         self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(".github\\skills"))
         self.assertEqual(
             [call.args[0] for call in run_hook.call_args_list],

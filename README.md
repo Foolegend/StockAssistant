@@ -24,20 +24,21 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 
 ## 🧩 扩展智能体
 
-- `stock-server/config/extension_sources.json`：指定 Claude Code `.claude` 扩展目录；也可用 `CLAUDE_CONFIG_DIR` 环境变量覆盖。
-- `.claude/agents/**/*.md`：自动发现 Agent，并注册为可选 Agent 和可委派子 Agent。
-- `.claude/commands/**/*.md`：自动发现 Command；默认名称为 `/命令路径`（可由 frontmatter 的 `name` 覆盖），正文作为工作流指令执行，`$ARGUMENTS` 会替换为用户输入。
-- `.claude/skills/**/SKILL.md`：递归发现 Claude Code Skill，按 DeepAgents Skills middleware 加载；支持 Skill 子目录。
-- `stock-server/config/agents.json`：保留 StockAssistant 自带 Agent、Skill/MCP 关联和默认 Agent。
-- `stock-server/config/commands.json`：保留 StockAssistant 自带命令和默认命令。
-- `stock-server/config/mcp_servers.json`：注册可信的 MCP stdio server；默认不启动任何 MCP server。
-- `stock-server/config/hooks.json`：注册由服务端显式批准的本地生命周期 hooks；默认不执行任何 hook。
+- 自动扫描工程根目录下 `.github`、`.claude`、`.cursor` 中的扩展，不读取外部目录，也不使用 `CLAUDE_CONFIG_DIR`。
+- `.github/agents/**/*.md`、`.claude/agents/**/*.md`、`.cursor/agents/**/*.md`：自动发现 Agent，并注册为可选 Agent 和可委派子 Agent。
+- 三个目录下的 `commands/**/*.md`：自动发现 Command；默认名称为 `/命令路径`（可由 frontmatter 的 `name` 覆盖），正文作为工作流指令执行，`$ARGUMENTS` 会替换为用户输入。
+- 三个目录下的 `skills/**/SKILL.md`：递归发现 Skill，按 DeepAgents Skills middleware 加载；支持 Skill 子目录。
+- 三个目录下 `hooks/**/*.json` 的 `hooks` 数组和 `mcp/**/*.json` 的 `servers` 数组：自动发现项目 Hook 与 MCP server，格式与下方配置示例一致；不再读取 `stock-server/config` 中的 Hook/MCP 注册文件。
 
 前端加载 `GET /agent/catalog` 展示 Agent、Command、Skill、MCP 和 Hook 的已注册信息，再将选中的 Agent/Command ID 发送到 `POST /agent/chat`。用户不需要知道或手动输入 ID；服务端不接受客户端传入本地 Skill 路径或 MCP 启动命令。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
 
-Claude Code 定义是 Markdown 指令，不是 Claude Code 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载，Command 正文作为本轮任务指令。外部定义内提及的工具只有在本平台实际配置后才能使用；Claude Code `settings.json`、hooks、memory 和权限配置不会导入或执行。MCP server 仍需在 StockAssistant 的 `mcp_servers.json` 里单独审核注册。
+Command 无需额外 JSON 配置；默认使用 ID 为 `chat` 的命令，若未发现则使用扫描到的第一个命令。若没有发现命令，普通对话仍可不选择 Command 进行。
 
-Hook 使用 `hooks.json` 的 `hooks` 数组登记，支持 `before_agent`、`after_agent` 和 `on_error`。每项必须包含唯一 `id`、`name`、`event` 和 argv 数组形式的 `command`，可用 `agent_ids` / `command_ids` 限定范围，以及 `timeout_seconds` 设置大于 0、最多 120 秒的运行时限。示例：
+Agent 无需额外 JSON 配置；通过 Agent Markdown frontmatter 中的 `skills` 和 `mcp_server_ids` 关联能力。可用 `default: true` 指定默认 Agent；未指定时优先使用 `stock-assistant`，否则选择扫描到的第一个 Agent。
+
+Agent、Command 和 Skill Markdown 是指令，不是 Claude Code 或 Cursor 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载，Command 正文作为本轮任务指令。定义中提及的工具只有在本平台实际配置后才能使用；Claude Code 原生 `settings.json` hooks、Cursor 配置、memory 和权限配置不会导入。只读取工程根目录扩展分类目录中的项目文件。
+
+Hook 无需服务端 JSON 配置文件；在 `.claude/hooks/`、`.cursor/hooks/` 或 `.github/hooks/` 下放置项目 JSON 文件，使用 `hooks` 数组登记。支持 `before_agent`、`after_agent` 和 `on_error`。每项必须包含唯一 `id`、`name`、`event` 和 argv 数组形式的 `command`，可用 `agent_ids` / `command_ids` 限定范围，以及 `timeout_seconds` 设置大于 0、最多 120 秒的运行时限。例如：
 
 ```json
 {
@@ -54,11 +55,11 @@ Hook 使用 `hooks.json` 的 `hooks` 数组登记，支持 `before_agent`、`aft
 }
 ```
 
-Hook 以无 shell 的子进程运行，工作目录为 `stock-server`，继承后端环境变量；JSON 事件上下文通过 stdin 传递（包含用户问题，成功后事件还包含回答）。成功时 stdout 不作为 Agent 指令使用；非零退出或超时会使本次请求失败。不会自动导入或执行 `.claude/settings.json` 中的 hook 命令。Hook 能读取继承的环境变量并以服务端身份运行，只登记可信脚本，并在改动配置后重启后端。
+Hook 以无 shell 的子进程运行，工作目录为 `stock-server`，继承后端环境变量；JSON 事件上下文通过 stdin 传递（包含用户问题，成功后事件还包含回答）。成功时 stdout 不作为 Agent 指令使用；非零退出或超时会使本次请求失败。不会导入或执行 `.claude/settings.json` 中的 hook 命令。Hook 能读取继承的环境变量并以服务端身份运行，只应放入可信的项目脚本，并在改动配置后重启后端。
 
-外部 Agent frontmatter 中的模型选择目前不映射到 Claude 模型；运行模型由 `stock-server/config/.env` 中的 `CHAT_MODEL` 决定。修改 `.claude` 文件或扩展源配置后需重启后端以重新扫描。
+Agent frontmatter 中的模型选择目前不映射到其他模型；运行模型由 `stock-server/config/.env` 中的 `CHAT_MODEL` 决定。修改扩展文件后需重启后端以重新扫描。
 
-MCP server 示例（放入 `mcp_servers.json` 的 `servers` 数组）：
+MCP server 无需服务端 JSON 配置文件；在 `.claude/mcp/`、`.cursor/mcp/` 或 `.github/mcp/` 下放置 JSON 文件，使用 `servers` 数组登记。例如：
 
 ```json
 {
@@ -74,7 +75,7 @@ MCP server 示例（放入 `mcp_servers.json` 的 `servers` 数组）：
 }
 ```
 
-然后在 Agent 的 `mcp_server_ids` 中引用 `"local-weather"`。MCP 配置是可信的服务端代码执行配置，只应注册经过审查的 server。
+然后在 Agent frontmatter 的 `mcp_server_ids` 中引用 `"local-weather"`。MCP 配置是可信的服务端代码执行配置，只应注册经过审查的 server。
 
 修改 JSON 扩展配置后重启后端。当前会话检查点保存在进程内存中，后端重启会清空；跨重启的数据库持久化可作为后续扩展。
 

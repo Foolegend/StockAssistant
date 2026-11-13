@@ -62,7 +62,7 @@ def agent_chat(req: AgentChatRequest):
     hook_context = {
         "question": req.question,
         "agent_id": agent["id"],
-        "command_id": command["id"],
+        "command_id": command["id"] if command else None,
         "thread_id": req.thread_id,
     }
     try:
@@ -70,14 +70,14 @@ def agent_chat(req: AgentChatRequest):
             "before_agent",
             hook_context,
             agent_id=agent["id"],
-            command_id=command["id"],
+            command_id=command["id"] if command else None,
         )
         answer = ask_agent(question, config=config, thread_id=req.thread_id)
         hook_runner.run(
             "after_agent",
             {**hook_context, "answer": answer},
             agent_id=agent["id"],
-            command_id=command["id"],
+            command_id=command["id"] if command else None,
         )
     except Exception as error:
         try:
@@ -85,7 +85,7 @@ def agent_chat(req: AgentChatRequest):
                 "on_error",
                 {**hook_context, "error": str(error)},
                 agent_id=agent["id"],
-                command_id=command["id"],
+                command_id=command["id"] if command else None,
             )
         except HookExecutionError as hook_error:
             raise HTTPException(
@@ -102,7 +102,7 @@ def agent_chat(req: AgentChatRequest):
         "data": {
             "answer": answer,
             "agent_id": agent["id"],
-            "command_id": command["id"],
+            "command_id": command["id"] if command else None,
             "model": config.model_name,
             "thread_id": req.thread_id,
         },

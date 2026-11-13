@@ -29,7 +29,7 @@
 
     <div class="input-group">
       <input [(ngModel)]="userQuestion" placeholder="请输入问题..." />
-      <button (click)="sendChat()" [disabled]="isLoading || !selectedAgentId || !selectedCommandId">发送</button>
+      <button (click)="sendChat()" [disabled]="isLoading || !selectedAgentId">发送</button>
     </div>
 
     <div *ngIf="isLoading" class="status">

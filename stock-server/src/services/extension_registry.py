@@ -1,5 +1,4 @@
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -9,18 +8,19 @@ import yaml
 
 SERVER_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ROOT = SERVER_ROOT / "config"
-SKILLS_ROOT = SERVER_ROOT.parent / ".github" / "skills"
+PROJECT_ROOT = SERVER_ROOT.parent
+EXTENSION_DIR_NAMES = (".github", ".claude", ".cursor")
 _EXTENSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
-_CLAUDE_RUNTIME_GUIDANCE = """
-## Claude Code definition compatibility
-- These Agent, Command, and Skill files are instructions, not executable Claude Code plugins.
+_PROJECT_RUNTIME_GUIDANCE = """
+## Project definition compatibility
+- These Agent, Command, and Skill files are instructions, not executable editor plugins.
 - For an Agent-tool delegation request, use the registered `task` tool and the matching loaded subagent.
-- For a Skill-tool request, read and follow the matching skill in the loaded Skills catalog; do not claim a Claude `Skill` tool was called.
+- For a Skill-tool request, read and follow the matching skill in the loaded Skills catalog.
 - `Bash` requests may use the available `execute` tool within the configured workspace.
 - AskUserQuestion requests must be handled by asking the user in the normal chat and waiting for their reply.
-- Do not claim to use unavailable WebSearch, WebFetch, MCP, or other Claude Code tools.
-- Claude Code allowedTools and permissionMode metadata are not security boundaries here; the runtime's actual server-side tools and workspace determine access.
-- Claude Code hooks, settings, permissions, and memory files are not imported or executed by this runtime. StockAssistant hooks are configured separately.
+- Do not claim to use unavailable web search, fetch, MCP, or other editor-specific tools.
+- Editor-specific tool and permission metadata are not security boundaries here; the runtime's actual server-side tools and workspace determine access.
+- Native editor settings, permissions, and memory files are not imported or executed. Hooks are loaded only from project `hooks` JSON files.
 """
 HOOK_EVENTS = {"before_agent", "after_agent", "on_error"}
 
@@ -81,74 +81,62 @@ def _validate_entries(entries: list[dict[str, Any]], source: str) -> dict[str, d
     return indexed
 
 
-def _read_source_dirs(config_root: Path) -> list[Path]:
-    source_config_path = config_root / "extension_sources.json"
-    if source_config_path.exists():
-        with source_config_path.open(encoding="utf-8") as file:
-            configured = json.load(file)
-        if not isinstance(configured, dict):
-            raise ValueError(f"{source_config_path} must contain a JSON object")
-    else:
-        configured = {}
-    env_source = os.getenv("CLAUDE_CONFIG_DIR")
-    if env_source is not None and not env_source.strip():
-        raise ValueError("CLAUDE_CONFIG_DIR must not be empty")
-    source_values = (
-        [env_source]
-        if env_source is not None
-        else configured.get("claude_config_dirs", [])
-    )
-    if not isinstance(source_values, list) or not all(isinstance(item, str) for item in source_values):
-        raise ValueError("extension_sources.json claude_config_dirs must be an array of paths")
+def _read_directory_collection(root: Path, directory_name: str, collection_name: str) -> list[dict[str, Any]]:
+    entries = []
+    directory = root / directory_name
+    if not directory.is_dir():
+        return entries
 
-    sources = []
-    for source_value in source_values:
-        source = Path(os.path.expandvars(os.path.expanduser(source_value))).resolve()
-        if not source.is_dir():
-            raise FileNotFoundError(f"Configured Claude Code extension source does not exist: {source}")
-        if source not in sources:
-            sources.append(source)
-    return sources
+    for path in sorted(directory.rglob("*.json")):
+        if root.name == ".claude" and directory_name == "hooks" and path.name == "hooks.json":
+            continue
+        _, collection_entries = _read_collection(path, collection_name)
+        entries.extend(collection_entries)
+    return entries
 
 
 class ExtensionRegistry:
     def __init__(
         self,
         config_root: Path = CONFIG_ROOT,
-        skills_root: Path = SKILLS_ROOT,
-        claude_config_dirs: list[Path] | None = None,
+        project_root: Path = PROJECT_ROOT,
     ) -> None:
         self.config_root = Path(config_root)
-        self.skills_root = Path(skills_root)
-        self.claude_config_dirs = (
-            [Path(path).resolve() for path in claude_config_dirs]
-            if claude_config_dirs is not None
-            else _read_source_dirs(self.config_root)
-        )
+        self.project_root = Path(project_root).resolve()
+        self.extension_roots = tuple(self.project_root / name for name in EXTENSION_DIR_NAMES)
 
         self.skills: dict[str, dict[str, Any]] = {}
         self.skill_aliases: dict[str, str] = {}
         self.skill_sources: list[str] = []
-        self._discover_skills(self.skills_root, local_source=True)
 
-        _, mcp_servers = _read_collection(self.config_root / "mcp_servers.json", "servers")
-        self.mcp_servers = _validate_entries(mcp_servers, "mcp_servers.json")
-        _, hook_entries = _read_collection(self.config_root / "hooks.json", "hooks")
-        self.hooks = _validate_entries(hook_entries, "hooks.json")
-        self.agents_config, local_agents = _read_collection(self.config_root / "agents.json", "agents")
-        self.agents = _validate_entries(local_agents, "agents.json")
-        self.commands_config, local_commands = _read_collection(self.config_root / "commands.json", "commands")
-        self.commands = _validate_entries(local_commands, "commands.json")
+        mcp_servers = []
+        for root in self.extension_roots:
+            mcp_servers.extend(_read_directory_collection(root, "mcp", "servers"))
+        self.mcp_servers = _validate_entries(mcp_servers, "project MCP definitions")
+        hook_entries = []
+        for root in self.extension_roots:
+            hook_entries.extend(_read_directory_collection(root, "hooks", "hooks"))
+        self.hooks = _validate_entries(hook_entries, "project hook definitions")
+        self.agents: dict[str, dict[str, Any]] = {}
+        self.default_agent_candidates: list[str] = []
+        self.commands: dict[str, dict[str, Any]] = {}
 
         self.agent_source_roots: dict[str, Path] = {}
-        self._discover_claude_definitions()
+        self._discover_project_definitions()
         self._validate_references()
-        self.default_agent_id = self.agents_config.get("default_agent_id")
-        self.default_command_id = self.commands_config.get("default_command_id")
-        if not isinstance(self.default_agent_id, str) or self.default_agent_id not in self.agents:
-            raise ValueError("agents.json default_agent_id must refer to a registered agent")
-        if not isinstance(self.default_command_id, str) or self.default_command_id not in self.commands:
-            raise ValueError("commands.json default_command_id must refer to a registered command")
+        if not self.agents:
+            raise ValueError("No agents found under project .github, .claude, or .cursor directories")
+        if len(self.default_agent_candidates) > 1:
+            raise ValueError("Only one project Agent may declare 'default: true'")
+        if self.default_agent_candidates:
+            self.default_agent_id = self.default_agent_candidates[0]
+        elif "stock-assistant" in self.agents:
+            self.default_agent_id = "stock-assistant"
+        else:
+            self.default_agent_id = next(iter(self.agents))
+        self.default_command_id = (
+            "chat" if "chat" in self.commands else next(iter(self.commands), None)
+        )
 
     def _discover_skills(self, skills_root: Path, *, local_source: bool = False) -> None:
         if not skills_root.is_dir():
@@ -181,9 +169,12 @@ class ExtensionRegistry:
             if str(source_root.resolve()) not in self.skill_sources:
                 self.skill_sources.append(str(source_root.resolve()))
 
-    def _discover_claude_definitions(self) -> None:
-        for config_dir in self.claude_config_dirs:
-            self._discover_skills(config_dir / "skills")
+    def _discover_project_definitions(self) -> None:
+        for config_dir in self.extension_roots:
+            self._discover_skills(
+                config_dir / "skills",
+                local_source=config_dir.name == ".github",
+            )
 
             for agent_file in sorted((config_dir / "agents").rglob("*.md")):
                 metadata, prompt = _read_markdown(agent_file)
@@ -195,19 +186,31 @@ class ExtensionRegistry:
                     raise ValueError(f"Duplicate agent id '{agent_id}' in {agent_file}")
                 description = metadata.get("description", "")
                 skill_ids = metadata.get("skills", [])
-                if not isinstance(description, str) or not isinstance(skill_ids, list) or not all(
-                    isinstance(item, str) for item in skill_ids
+                server_ids = metadata.get("mcp_server_ids", [])
+                is_default = metadata.get("default", False)
+                display_name = metadata.get("display_name") or agent_id.replace("-", " ").title()
+                if (
+                    not isinstance(description, str)
+                    or not isinstance(skill_ids, list)
+                    or not all(isinstance(item, str) for item in skill_ids)
+                    or not isinstance(server_ids, list)
+                    or not all(isinstance(item, str) for item in server_ids)
+                    or not isinstance(is_default, bool)
+                    or not isinstance(display_name, str)
+                    or not display_name.strip()
                 ):
-                    raise ValueError(f"Invalid description or skills in {agent_file}")
+                    raise ValueError(f"Invalid Agent metadata in {agent_file}")
                 self.agents[agent_id] = {
                     "id": agent_id,
-                    "name": agent_id.replace("-", " ").title(),
+                    "name": display_name,
                     "description": description,
                     "skill_ids": skill_ids,
-                    "mcp_server_ids": [],
+                    "mcp_server_ids": server_ids,
                     "prompt": prompt,
-                    "source_type": "claude-code",
+                    "source_type": "project",
                 }
+                if is_default:
+                    self.default_agent_candidates.append(agent_id)
                 self.agent_source_roots[agent_id] = config_dir.parent
 
             for command_file in sorted((config_dir / "commands").rglob("*.md")):
@@ -231,7 +234,7 @@ class ExtensionRegistry:
                     "instruction": None,
                     "prompt": prompt,
                     "agent_ids": [],
-                    "source_type": "claude-code",
+                    "source_type": "project",
                     "project_root": str(config_dir.parent),
                 }
 
@@ -381,21 +384,27 @@ class ExtensionRegistry:
             "default_command_id": self.default_command_id,
         }
 
-    def resolve(self, agent_id: str | None, command_id: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    def resolve(
+        self,
+        agent_id: str | None,
+        command_id: str | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         selected_agent_id = agent_id or self.default_agent_id
         selected_command_id = command_id or self.default_command_id
         agent = self.agents.get(selected_agent_id)
-        command = self.commands.get(selected_command_id)
+        command = self.commands.get(selected_command_id) if selected_command_id is not None else None
         if agent is None:
             raise KeyError(f"Unknown agent '{selected_agent_id}'")
-        if command is None:
+        if selected_command_id is not None and command is None:
             raise KeyError(f"Unknown command '{selected_command_id}'")
-        allowed_agents = command.get("agent_ids", [])
+        allowed_agents = command.get("agent_ids", []) if command else []
         if allowed_agents and selected_agent_id not in allowed_agents:
             raise ValueError(f"Command '{selected_command_id}' is not available for agent '{selected_agent_id}'")
         return agent, command
 
-    def command_input(self, command: dict[str, Any], question: str) -> str:
+    def command_input(self, command: dict[str, Any] | None, question: str) -> str:
+        if command is None:
+            return question
         parts = []
         if command.get("instruction"):
             parts.append(command["instruction"])
@@ -410,13 +419,13 @@ class ExtensionRegistry:
     def _subagents(self, selected_agent_id: str) -> list[dict[str, Any]]:
         subagents = []
         for agent_id, agent in self.agents.items():
-            if agent_id == selected_agent_id or agent.get("source_type") != "claude-code":
+            if agent_id == selected_agent_id or agent.get("source_type") != "project":
                 continue
             subagent_prompt = agent.get("prompt", "")
             if subagent_prompt:
-                subagent_prompt = f"{subagent_prompt}\n\n{_CLAUDE_RUNTIME_GUIDANCE}".strip()
+                subagent_prompt = f"{subagent_prompt}\n\n{_PROJECT_RUNTIME_GUIDANCE}".strip()
             else:
-                subagent_prompt = f"{agent.get('description', '')}\n\n{_CLAUDE_RUNTIME_GUIDANCE}".strip()
+                subagent_prompt = f"{agent.get('description', '')}\n\n{_PROJECT_RUNTIME_GUIDANCE}".strip()
             subagents.append({
                 "name": agent_id,
                 "description": agent.get("description", ""),
@@ -428,22 +437,25 @@ class ExtensionRegistry:
     def agent_runtime_config(
         self,
         agent: dict[str, Any],
-        command: dict[str, Any],
+        command: dict[str, Any] | None,
         default_system_prompt: str = "",
     ) -> dict[str, Any]:
         system_prompt = agent.get("prompt") or agent.get("system_prompt") or default_system_prompt
-        if agent.get("source_type") == "claude-code":
-            system_prompt = f"{system_prompt}\n\n{_CLAUDE_RUNTIME_GUIDANCE}".strip()
-        instruction = command.get("instruction")
+        if agent.get("source_type") == "project":
+            system_prompt = f"{system_prompt}\n\n{_PROJECT_RUNTIME_GUIDANCE}".strip()
+        instruction = command.get("instruction") if command else None
         if instruction:
             system_prompt = f"{system_prompt or ''}\n\n## 当前命令：{command['name']}\n{instruction}".strip()
 
         agent_root = self.agent_source_roots.get(agent["id"])
-        project_root = command.get("project_root") or (str(agent_root) if agent_root else str(SERVER_ROOT))
+        project_root = (
+            (command.get("project_root") if command else None)
+            or (str(agent_root) if agent_root else str(SERVER_ROOT))
+        )
         skill_dirs = self._skill_source_paths(agent.get("skill_ids", []))
 
         return {
-            "model_name": agent.get("model") if agent.get("source_type") != "claude-code" else None,
+            "model_name": agent.get("model") if agent.get("source_type") != "project" else None,
             "skill_dirs": skill_dirs,
             "mcp_servers": [self.mcp_servers[server_id] for server_id in agent.get("mcp_server_ids", [])],
             "system_prompt": system_prompt,

@@ -19,7 +19,7 @@ class HookRunner:
         context: dict[str, Any],
         *,
         agent_id: str,
-        command_id: str,
+        command_id: str | None,
     ) -> None:
         payload = json.dumps(
             {**context, "event": event},

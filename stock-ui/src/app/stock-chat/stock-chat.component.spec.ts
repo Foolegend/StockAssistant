@@ -57,6 +57,17 @@ describe('StockChatComponent', () => {
     request.flush({ code: 0, data: { answer: '完成' } });
   });
 
+  it('sends ordinary chat without a command when none were discovered', () => {
+    component.commands = [];
+    component.selectedCommandId = '';
+    component.userQuestion = '你好';
+    component.sendChat();
+
+    const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
+    expect(request.request.body.command_id).toBeNull();
+    request.flush({ code: 0, data: { answer: '你好' } });
+  });
+
   it('updates the command when the selected agent cannot use it', () => {
     component.commands = [
       { id: 'command-a', name: '命令 A', description: '', agent_ids: ['agent-a'] },
