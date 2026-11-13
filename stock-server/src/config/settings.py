@@ -10,7 +10,7 @@ def get_settings():
     return {
         "project_root": str(BACK_ROOT),
         "env_path": str(ENV_PATH),
-        "model": os.getenv("CHAT_MODEL", "gpt-oss:120b-cloud"),
+        "model": os.getenv("CHAT_MODEL", "qwen3.5:4b"),
         "openai_api_key": os.getenv("OPENAI_API_KEY"),
         "openai_api_base": os.getenv("OPENAI_API_BASE"),
     }
