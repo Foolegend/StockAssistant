@@ -57,4 +57,39 @@ describe('StockChatComponent', () => {
     expect(request.request.body.command_id).toBeUndefined();
     request.flush({ code: 0, data: { answer: '你好' } });
   });
+
+  it('renders the answer as Markdown instead of raw text', () => {
+    component.userQuestion = '分析中兴通讯股票';
+    component.sendChat();
+
+    const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
+    request.flush({
+      code: 0,
+      data: {
+        answer: '## 决策看板\n\n| 指标 | 数值 |\n|---|---|\n| 现价 | 28.06 |',
+      },
+    });
+    fixture.detectChanges();
+
+    const answer = fixture.nativeElement.querySelector('.answer-content');
+    expect(answer.querySelector('h2')).toBeTruthy();
+    expect(answer.querySelector('table')).toBeTruthy();
+    expect(answer.textContent).toContain('28.06');
+  });
+
+  it('displays the backend detail for a failed request', () => {
+    component.userQuestion = '帮我分析下中兴通讯公司的股票';
+    component.sendChat();
+
+    const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
+    request.flush(
+      { detail: "Component routing failed: Router selected unknown agent 'null'" },
+      { status: 502, statusText: 'Bad Gateway' },
+    );
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.error')?.textContent).toContain(
+      "Router selected unknown agent 'null'",
+    );
+  });
 });

@@ -165,3 +165,7 @@ stock-server/tmp/
 /tmp/
 .vscode/
 stock-server/config/.env
+.tmp/
+
+# ReCode local database
+.recode

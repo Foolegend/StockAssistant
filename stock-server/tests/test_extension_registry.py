@@ -734,6 +734,13 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(response["data"]["answer"], "分析完成")
         self.assertEqual(response["data"]["agent_id"], "planner")
         self.assertIsNone(response["data"]["command_id"])
+        self.assertEqual(
+            response["data"]["skills"],
+            [{
+                "id": "stock-analysis",
+                "name": extension_registry.skills["stock-analysis"]["name"],
+            }],
+        )
         self.assertIn("## Referenced Command: /plan", ask_agent.call_args.args[0])
         self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(".stock\\skills"))
         self.assertEqual(

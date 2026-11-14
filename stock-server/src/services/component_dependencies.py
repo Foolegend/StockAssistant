@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.services.component_router import ComponentSelection
 
@@ -164,21 +164,46 @@ def _infer_references(
         "for this dependency scan. Return an empty list when no dependency is needed.\n\n"
         f"Available components:\n{json.dumps(_reference_options(registry), ensure_ascii=False)}"
     )
-    raw_references = model.with_structured_output(
+    structured_model = model.with_structured_output(
         ComponentReferenceBatch,
         method="function_calling",
-    ).invoke(
-        [
-            SystemMessage(content=prompt),
-            HumanMessage(
-                content=json.dumps(
-                    {"user_request": question, "components": content_nodes},
-                    ensure_ascii=False,
-                )
-            ),
-        ]
     )
-    return ComponentReferenceBatch.model_validate(raw_references).references
+    messages = [
+        SystemMessage(content=prompt),
+        HumanMessage(
+            content=json.dumps(
+                {"user_request": question, "components": content_nodes},
+                ensure_ascii=False,
+            )
+        ),
+    ]
+
+    raw_references = None
+    for attempt in range(2):
+        raw_references = structured_model.invoke(messages)
+        if raw_references is not None:
+            break
+        # The model answered with plain text instead of calling the tool, so the
+        # parser produced nothing. Ask it again before giving up.
+        messages.append(
+            SystemMessage(
+                content=(
+                    "You must call the ComponentReferenceBatch tool. Do not answer "
+                    "with plain text. Call it with an empty list when no "
+                    "dependency applies."
+                )
+            )
+        )
+
+    if raw_references is None:
+        # No usable tool call: fall back to "no nested dependency" instead of
+        # failing the whole request.
+        return []
+
+    try:
+        return ComponentReferenceBatch.model_validate(raw_references).references
+    except ValidationError:
+        return []
 
 
 def resolve_component_dependencies(

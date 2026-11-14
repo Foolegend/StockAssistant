@@ -10,11 +10,7 @@ description: |
 
   触发场景：用户提供股票代码要求分析、问某只股票怎么样、要求看盘分析等。
   示例输入：「分析下 TSLA PLTR」「600519怎么样」「帮我看看HK00700」
-allowed-tools:
-  - Read
-  - Write
-  - Bash
-  - WebSearch
+allowed-tools: Read Write Bash WebSearch
 metadata:
   trigger: 当用户提供股票代码要求分析，或问某只股票走势/建议时触发
   author: Alex Leo (赛哥)

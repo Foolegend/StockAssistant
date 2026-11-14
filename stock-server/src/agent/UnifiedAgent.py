@@ -15,6 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.config.settings import get_settings
 from src.mcp.client import load_mcp_tools_for_agent
+from src.runtime.encoding import install_tolerant_subprocess
 from src.services.hook_runner import HookToolMiddleware
 
 
@@ -117,6 +118,11 @@ def ensure_skill_dirs(skill_dirs: Optional[Sequence[str]] = None) -> list[str]:
 
 
 def build_agent(config: Optional[AgentConfig] = None, **overrides):
+    # The agent backends call subprocess.run(text=True), which decodes with the
+    # OS code page (GBK on zh-CN Windows) and raises UnicodeDecodeError on
+    # UTF-8 child output.  Make those calls decode tolerantly.
+    install_tolerant_subprocess()
+
     cfg = config or AgentConfig()
     for key, value in overrides.items():
         if hasattr(cfg, key):
@@ -137,6 +143,10 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
             "SKILL_ROOT": DEFAULT_SKILLS_DIR,
             "CLAUDE_PROJECT_DIR": project_root,
             "PYTHON_EXEC": sys.executable,
+            # Child processes must emit UTF-8 so the parent can decode them
+            # consistently regardless of the Windows console code page.
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
         },
         virtual_mode=True,
         timeout=120,

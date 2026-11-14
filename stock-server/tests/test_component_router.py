@@ -9,12 +9,14 @@ from src.services.component_router import ComponentSelection, select_components
 
 class FakeStructuredModel:
     def __init__(self, selection):
-        self.selection = selection
+        self.responses = selection if isinstance(selection, list) else [selection]
         self.messages = None
+        self.calls = []
 
     def invoke(self, messages):
         self.messages = messages
-        return self.selection
+        self.calls.append(messages)
+        return self.responses.pop(0)
 
 
 class FakeModel:
@@ -96,28 +98,115 @@ class ComponentRouterTests(unittest.TestCase):
         self.assertIs(model.schema, ComponentSelection)
         self.assertEqual(model.method, "function_calling")
 
-    def test_rejects_unregistered_component_ids(self):
-        model = FakeModel(
-            {
-                "agent_id": "unknown-agent",
-                "command_id": None,
-                "skill_ids": [],
-                "mcp_server_ids": [],
+    def test_retries_when_router_uses_command_display_name_instead_of_id(self):
+        registry = FakeRegistry()
+        registry.commands = {
+            "setup-pm": {
+                "id": "setup-pm",
+                "name": "/setup-pm",
+                "agent_ids": ["stock-analyst"],
             }
+        }
+        catalog = registry.catalog()
+        catalog["commands"] = [
+            {"id": "setup-pm", "name": "/setup-pm", "agent_ids": ["stock-analyst"]}
+        ]
+        registry.catalog = lambda: catalog
+        model = FakeModel(
+            [
+                {
+                    "agent_id": "stock-analyst",
+                    "command_id": "/setup-pm",
+                    "skill_ids": [],
+                    "mcp_server_ids": [],
+                },
+                {
+                    "agent_id": "stock-analyst",
+                    "command_id": None,
+                    "skill_ids": [],
+                    "mcp_server_ids": [],
+                },
+            ]
         )
+
+        selection = select_components("Analyze a stock", registry, model)
+
+        self.assertIsNone(selection.command_id)
+        self.assertEqual(len(model.structured_model.calls), 2)
+        self.assertIn(
+            "select null when no command directly applies",
+            model.structured_model.calls[1][1].content.lower(),
+        )
+
+    def test_rejects_unregistered_component_ids(self):
+        invalid_selection = {
+            "agent_id": "unknown-agent",
+            "command_id": None,
+            "skill_ids": [],
+            "mcp_server_ids": [],
+        }
+        model = FakeModel([invalid_selection, invalid_selection])
 
         with self.assertRaisesRegex(ValueError, "unknown agent"):
             select_components("Analyze TSLA", FakeRegistry(), model)
 
-    def test_rejects_command_not_available_to_selected_agent(self):
+    def test_retries_when_router_returns_null_agent_id(self):
         model = FakeModel(
-            {
-                "agent_id": "stock-analyst",
-                "command_id": "analyze-stock",
-                "skill_ids": [],
-                "mcp_server_ids": [],
-            }
+            [
+                {
+                    "agent_id": "null",
+                    "command_id": None,
+                    "skill_ids": [],
+                    "mcp_server_ids": [],
+                },
+                {
+                    "agent_id": "stock-analyst",
+                    "command_id": None,
+                    "skill_ids": [],
+                    "mcp_server_ids": [],
+                },
+            ]
         )
+
+        selection = select_components("你好", FakeRegistry(), model)
+
+        self.assertEqual(selection.agent_id, "stock-analyst")
+        self.assertEqual(len(model.structured_model.calls), 2)
+        self.assertIn(
+            "must be exactly one registered agent ID",
+            model.structured_model.calls[1][1].content,
+        )
+
+    def test_retries_when_router_omits_required_agent_id(self):
+        model = FakeModel(
+            [
+                {"command_id": None},
+                {
+                    "agent_id": "stock-analyst",
+                    "command_id": None,
+                    "skill_ids": [],
+                    "mcp_server_ids": [],
+                },
+            ]
+        )
+
+        selection = select_components("你好", FakeRegistry(), model)
+
+        self.assertEqual(selection.agent_id, "stock-analyst")
+        self.assertEqual(len(model.structured_model.calls), 2)
+        self.assertIn(
+            "complete all required fields",
+            model.structured_model.calls[1][1].content.lower(),
+        )
+
+    def test_rejects_command_not_available_to_selected_agent(self):
+        invalid_selection = {
+            "agent_id": "stock-analyst",
+            "command_id": "analyze-stock",
+            "skill_ids": [],
+            "mcp_server_ids": [],
+        }
+        model = FakeModel([invalid_selection, invalid_selection])
         registry = FakeRegistry()
         registry.commands = {
             "analyze-stock": {"id": "analyze-stock", "agent_ids": ["another-agent"]}
@@ -139,5 +228,10 @@ class ComponentRouterTests(unittest.TestCase):
             }
             selection[field] = selected_id
 
+            invalid_selection = dict(selection)
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
-                select_components("Analyze TSLA", FakeRegistry(), FakeModel(selection))
+                select_components(
+                    "Analyze TSLA",
+                    FakeRegistry(),
+                    FakeModel([invalid_selection, invalid_selection]),
+                )

@@ -3,7 +3,11 @@
 
   <div class="chat-container">
     <div class="input-group">
-      <input [(ngModel)]="userQuestion" placeholder="请输入问题..." />
+      <input
+        [(ngModel)]="userQuestion"
+        placeholder="请输入问题..."
+        (keyup.enter)="sendChat()"
+      />
       <button (click)="sendChat()" [disabled]="isLoading || !userQuestion.trim()">发送</button>
     </div>
 
@@ -16,8 +20,18 @@
     </div>
 
     <div *ngIf="chatAnswer" class="answer-box">
-      <h3>AI 回复：</h3>
-      <div class="answer-content">{{ chatAnswer }}</div>
+      <div class="answer-header">
+        <h3>AI 回复：</h3>
+        <button
+          type="button"
+          class="copy-button"
+          (click)="copyAnswer()"
+          [disabled]="copyState !== 'idle'"
+        >
+          {{ copyLabel }}
+        </button>
+      </div>
+      <div class="answer-content markdown-body" [innerHTML]="chatAnswer | markdown"></div>
     </div>
   </div>
 </div>

@@ -128,6 +128,10 @@ def agent_chat(req: AgentChatRequest):
             "answer": answer,
             "agent_id": agent["id"],
             "command_id": command["id"] if command else None,
+            "skills": [
+                {"id": skill_id, "name": extension_registry.skills[skill_id]["name"]}
+                for skill_id in resolved.skill_ids
+            ],
             "model": config.model_name,
             "thread_id": req.thread_id,
         },

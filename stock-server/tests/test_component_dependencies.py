@@ -256,6 +256,25 @@ class ComponentDependencyTests(unittest.TestCase):
                 model,
             )
 
+    def test_ignores_model_responses_without_a_tool_call(self):
+        registry = FakeRegistry()
+        registry.agents["root-agent"]["prompt"] = "Handle the user request."
+        selection = ComponentSelection(
+            agent_id="root-agent",
+            skill_ids=[],
+            mcp_server_ids=[],
+        )
+        model = FakeModel([None, None])
+
+        resolved = resolve_component_dependencies(
+            "Do the task",
+            selection,
+            registry,
+            model,
+        )
+
+        self.assertEqual(resolved.referenced_agent_ids, [])
+
     def test_rejects_dependency_chains_beyond_the_depth_limit(self):
         registry = FakeRegistry()
         registry.agents["root-agent"]["prompt"] = "Use @command:analysis."

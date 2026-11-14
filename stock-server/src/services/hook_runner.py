@@ -6,6 +6,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 
+from src.runtime.encoding import decode_output
 from src.services.hook_matcher import matches_hook
 
 
@@ -54,13 +55,13 @@ class HookRunner:
                     command,
                     cwd=self.working_directory,
                     env=hook_env,
-                    input=payload,
+                    input=payload.encode("utf-8"),
                     capture_output=True,
-                    text=True,
                     timeout=hook.get("timeout_seconds", 10),
                     check=False,
                     shell=hook.get("shell", False),
                 )
+                stderr = decode_output(result.stderr)
             except subprocess.TimeoutExpired as error:
                 raise HookExecutionError(
                     f"Hook '{hook_id}' timed out after {hook.get('timeout_seconds', 10)} seconds"
@@ -69,7 +70,7 @@ class HookRunner:
                 raise HookExecutionError(f"Could not start hook '{hook_id}': {error}") from error
 
             if result.returncode != 0:
-                detail = result.stderr.strip()
+                detail = stderr.strip()
                 suffix = f": {detail[:500]}" if detail else ""
                 raise HookExecutionError(
                     f"Hook '{hook_id}' exited with code {result.returncode}{suffix}"
