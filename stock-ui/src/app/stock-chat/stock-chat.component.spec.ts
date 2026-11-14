@@ -21,16 +21,6 @@ describe('StockChatComponent', () => {
     fixture = TestBed.createComponent(StockChatComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
-
-    httpTestingController.expectOne('http://127.0.0.1:8015/agent/catalog').flush({
-      code: 0,
-      data: {
-        agents: [{ id: 'stock-analyst', name: '股票分析师', description: '分析股票', skills: [] }],
-        commands: [{ id: 'stock-analysis', name: '股票分析', description: '', agent_ids: ['stock-analyst'] }],
-        default_agent_id: 'stock-analyst',
-        default_command_id: 'stock-analysis',
-      },
-    });
   });
 
   afterEach(() => {
@@ -41,43 +31,30 @@ describe('StockChatComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('shows readable agent and command names', () => {
-    expect(fixture.nativeElement.textContent).toContain('股票分析师');
-    expect(fixture.nativeElement.textContent).toContain('股票分析');
+  it('does not expose agent or command selectors', () => {
+    expect(fixture.nativeElement.querySelectorAll('select').length).toBe(0);
   });
 
-  it('sends the selected registered IDs', () => {
+  it('sends only the question and conversation thread', () => {
     component.userQuestion = '分析 TSLA';
     component.sendChat();
 
     const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
-    expect(request.request.body.agent_id).toBe('stock-analyst');
-    expect(request.request.body.command_id).toBe('stock-analysis');
-    expect(request.request.body.skill_dirs).toBeUndefined();
+    expect(request.request.body).toEqual({
+      question: '分析 TSLA',
+      thread_id: jasmine.any(String),
+    });
     request.flush({ code: 0, data: { answer: '完成' } });
   });
 
-  it('sends ordinary chat without a command when none were discovered', () => {
-    component.commands = [];
-    component.selectedCommandId = '';
+  it('does not load the component catalog for chat routing', () => {
+    httpTestingController.expectNone('http://127.0.0.1:8015/agent/catalog');
     component.userQuestion = '你好';
     component.sendChat();
 
     const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
-    expect(request.request.body.command_id).toBeNull();
+    expect(request.request.body.agent_id).toBeUndefined();
+    expect(request.request.body.command_id).toBeUndefined();
     request.flush({ code: 0, data: { answer: '你好' } });
-  });
-
-  it('updates the command when the selected agent cannot use it', () => {
-    component.commands = [
-      { id: 'command-a', name: '命令 A', description: '', agent_ids: ['agent-a'] },
-      { id: 'command-b', name: '命令 B', description: '', agent_ids: ['agent-b'] },
-    ];
-    component.selectedAgentId = 'agent-b';
-    component.selectedCommandId = 'command-a';
-
-    component.onAgentChange();
-
-    expect(component.selectedCommandId).toBe('command-b');
   });
 });

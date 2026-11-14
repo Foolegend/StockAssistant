@@ -12,8 +12,10 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 
+from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.config.settings import get_settings
 from src.mcp.client import load_mcp_tools_for_agent
+from src.services.hook_runner import HookToolMiddleware
 
 
 settings = get_settings()
@@ -39,7 +41,10 @@ def _normalize_path(path: Optional[str]) -> Optional[str]:
 class AgentConfig:
     model_name: Optional[str] = None
     skill_dirs: Optional[List[str]] = None
+    selected_skill_ids: Optional[List[str]] = None
+    selected_skill_directories: Optional[dict[str, List[str]]] = None
     mcp_servers: Optional[List[dict | str]] = None
+    hooks: Optional[dict[str, dict]] = None
     system_prompt: Optional[str] = None
     project_root: Optional[str] = None
     subagents: Optional[List[dict]] = None
@@ -49,6 +54,8 @@ class AgentConfig:
     def __post_init__(self):
         if self.skill_dirs is not None:
             self.skill_dirs = self._normalize_list(self.skill_dirs)
+        if self.selected_skill_ids is not None:
+            self.selected_skill_ids = self._normalize_list(self.selected_skill_ids)
         if self.mcp_servers is not None:
             self.mcp_servers = self._normalize_list(self.mcp_servers)
 
@@ -135,10 +142,23 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
         timeout=120,
         max_output_bytes=100000,
     )
+    middleware = [HookToolMiddleware(cfg.hooks or {}, project_root)]
+    if cfg.selected_skill_ids is not None:
+        middleware.insert(
+            0,
+            SelectedSkillsMiddleware(
+                backend,
+                skill_dirs,
+                cfg.selected_skill_ids,
+                cfg.selected_skill_directories,
+            ),
+        )
+        skill_dirs = None
 
     agent = create_deep_agent(
         model=llm,
         tools=mcp_tools,
+        middleware=middleware,
         skills=skill_dirs,
         subagents=cfg.subagents or None,
         backend=backend,
@@ -154,7 +174,10 @@ def _cached_agent(config: Optional[AgentConfig]):
     cache_data = {
         "model_name": cfg.model_name,
         "skill_dirs": cfg.skill_dirs,
+        "selected_skill_ids": cfg.selected_skill_ids,
+        "selected_skill_directories": cfg.selected_skill_directories,
         "mcp_servers": cfg.mcp_servers,
+        "hooks": cfg.hooks,
         "system_prompt": cfg.system_prompt,
         "project_root": cfg.project_root,
         "subagents": cfg.subagents,

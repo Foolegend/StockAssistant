@@ -28,35 +28,45 @@ def load_mcp_tools_for_agent(mcp_servers):
                 server_name = Path(server_path).stem
             else:
                 command = server.get("command")
-                if not isinstance(command, str) or not command.strip():
-                    raise ValueError(f"MCP server '{server.get('id', 'unknown')}' must define a command")
+                if isinstance(command, str) and command.strip():
+                    cwd = server.get("cwd") or PROJECT_ROOT
+                    if not os.path.isabs(cwd):
+                        cwd = os.path.join(PROJECT_ROOT, cwd)
 
-                cwd = server.get("cwd") or PROJECT_ROOT
-                if not os.path.isabs(cwd):
-                    cwd = os.path.join(PROJECT_ROOT, cwd)
+                    server_env = os.environ.copy()
+                    for key, value in server.get("env", {}).items():
+                        if not isinstance(value, str):
+                            raise ValueError(f"MCP server environment value '{key}' must be a string")
+                        if value.startswith("${") and value.endswith("}"):
+                            variable_name = value[2:-1]
+                            if variable_name not in os.environ:
+                                raise ValueError(
+                                    f"Environment variable '{variable_name}' required by MCP server "
+                                    f"'{server.get('id', 'unknown')}' is not set"
+                                )
+                            server_env[key] = os.environ[variable_name]
+                        else:
+                            server_env[key] = value
 
-                server_env = os.environ.copy()
-                for key, value in server.get("env", {}).items():
-                    if not isinstance(value, str):
-                        raise ValueError(f"MCP server environment value '{key}' must be a string")
-                    if value.startswith("${") and value.endswith("}"):
-                        variable_name = value[2:-1]
-                        if variable_name not in os.environ:
-                            raise ValueError(
-                                f"Environment variable '{variable_name}' required by MCP server "
-                                f"'{server.get('id', 'unknown')}' is not set"
-                            )
-                        server_env[key] = os.environ[variable_name]
-                    else:
-                        server_env[key] = value
+                    connection = {
+                        "transport": "stdio",
+                        "command": command,
+                        "args": server.get("args", []),
+                        "env": server_env,
+                        "cwd": os.path.abspath(cwd),
+                    }
+                elif server.get("type") == "http" and isinstance(server.get("url"), str):
+                    connection = {
+                        "transport": "streamable_http",
+                        "url": server["url"],
+                    }
+                    if "headers" in server:
+                        connection["headers"] = server["headers"]
+                else:
+                    raise ValueError(
+                        f"MCP server '{server.get('id', 'unknown')}' must define a command or an HTTP URL"
+                    )
 
-                connection = {
-                    "transport": "stdio",
-                    "command": command,
-                    "args": server.get("args", []),
-                    "env": server_env,
-                    "cwd": os.path.abspath(cwd),
-                }
                 server_name = server.get("id") or server.get("name")
 
             tools.extend(

@@ -9,10 +9,14 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from src.api.chat import AgentChatRequest, agent_chat, agent_catalog, extension_registry
+from src.mcp.client import load_mcp_tools_for_agent
+from src.services.component_dependencies import ResolvedComponents
+from src.services.component_router import ComponentSelection
 from src.services.extension_registry import ExtensionRegistry
-from src.services.hook_runner import HookExecutionError, HookRunner
+from src.services.hook_runner import HookExecutionError, HookRunner, HookToolMiddleware
 
 
 class ExtensionRegistryTests(unittest.TestCase):
@@ -21,34 +25,32 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         self.config_root = self.root / "config"
         self.config_root.mkdir(parents=True)
-        self.skills_root = self.root / ".github" / "skills"
+        self.skills_root = self.root / "stock-server" / ".stock" / "skills"
         self.skills_root.mkdir(parents=True)
-        default_command = self.root / ".claude" / "commands" / "chat.md"
-        default_command.parent.mkdir(parents=True)
-        default_command.write_text(
+        chat_command = self.root / "stock-server" / ".stock" / "commands" / "chat.md"
+        chat_command.parent.mkdir(parents=True)
+        chat_command.write_text(
             "---\nname: Chat\ndescription: General chat.\n---\nAnswer clearly.\n",
             encoding="utf-8",
         )
-        agents_dir = self.root / ".github" / "agents"
+        agents_dir = self.root / "stock-server" / ".stock" / "agents"
         agents_dir.mkdir(parents=True)
         (agents_dir / "assistant.md").write_text(
-            "---\nname: assistant\ndisplay_name: Assistant\ndefault: true\n"
+            "---\nname: assistant\ndisplay_name: Assistant\n"
             "skills: [sample-skill]\nmcp_server_ids: [local-tools]\n---\n",
             encoding="utf-8",
         )
-        mcp_dir = self.root / ".github" / "mcp"
-        mcp_dir.mkdir(parents=True)
-        (mcp_dir / "local-tools.json").write_text(
+        mcp_config_dir = self.root / "stock-server" / ".stock" / "mcp-configs"
+        mcp_config_dir.mkdir(parents=True, exist_ok=True)
+        (mcp_config_dir / "mcp-servers.json").write_text(
             json.dumps({
-                "servers": [
-                    {
-                        "id": "local-tools",
-                        "name": "Local tools",
+                "mcpServers": {
+                    "local-tools": {
                         "command": "node",
                         "args": ["server.js"],
                         "env": {"API_KEY": "${LOCAL_TOOLS_KEY}"},
                     }
-                ]
+                }
             }),
             encoding="utf-8",
         )
@@ -69,24 +71,208 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         catalog = registry.catalog()
 
-        self.assertEqual(catalog["default_agent_id"], "assistant")
-        self.assertEqual(catalog["default_command_id"], "chat")
         self.assertEqual(catalog["agents"][0]["name"], "Assistant")
         self.assertEqual(catalog["agents"][0]["skills"][0]["id"], "sample-skill")
         self.assertEqual(catalog["commands"][0]["name"], "Chat")
         self.assertEqual(catalog["mcp_servers"][0]["id"], "local-tools")
         self.assertEqual(catalog["skills"][0]["id"], "sample-skill")
+        self.assertNotIn("default_agent_id", catalog)
+        self.assertNotIn("default_command_id", catalog)
+
+    def test_component_bodies_are_read_only_when_requested(self):
+        with patch(
+            "src.services.extension_registry._read_markdown",
+            side_effect=AssertionError("component body was read during discovery"),
+        ):
+            registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        self.assertNotIn("prompt", registry.agents["assistant"])
+        self.assertNotIn("prompt", registry.commands["chat"])
+        self.assertNotIn("content", registry.skills["sample-skill"])
+
+        self.assertEqual(registry.component_content("agent", "assistant"), "")
+        self.assertEqual(
+            registry.component_content("command", "chat"),
+            "Answer clearly.",
+        )
+        self.assertIn(
+            "# Sample",
+            registry.component_content("skill", "sample-skill"),
+        )
+
+    def test_component_body_is_read_from_disk_after_registry_discovery(self):
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+        command_file = Path(registry.commands["chat"]["file_path"])
+        command_file.write_text(
+            "---\nname: Chat\ndescription: Updated summary.\n---\nUpdated body.\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            registry.component_content("command", "chat"),
+            "Updated body.",
+        )
+
+    def test_github_duplicate_skill_is_ignored(self):
+        github_skill = self.root / ".github" / "skills" / "sample-skill"
+        github_skill.mkdir(parents=True)
+        (github_skill / "SKILL.md").write_text(
+            "---\nname: sample-skill\ndescription: GitHub definition.\n---\n# GitHub skill\n",
+            encoding="utf-8",
+        )
+
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        self.assertEqual(
+            registry.skills["sample-skill"]["source_root"],
+            str(self.skills_root.resolve()),
+        )
+        self.assertIn(
+            "# Sample",
+            registry.component_content("skill", "sample-skill"),
+        )
+
+    def test_duplicate_stock_skill_ids_raise_an_error(self):
+        skills_root = self.root / "stock-server" / ".stock" / "skills"
+        for directory in ("first", "second"):
+            skill_dir = skills_root / directory
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: duplicate-skill\ndescription: Duplicate.\n---\n",
+                encoding="utf-8",
+            )
+
+        with self.assertRaisesRegex(ValueError, "Duplicate skill id 'duplicate-skill'"):
+            ExtensionRegistry(self.config_root, project_root=self.root)
+
+    def test_cursor_files_are_not_loaded_or_validated(self):
+        cursor_root = self.root / ".cursor"
+        (cursor_root / "agents").mkdir(parents=True)
+        (cursor_root / "agents" / "invalid.md").write_text(
+            "---\nname: bad agent\nskills: invalid\n---\n",
+            encoding="utf-8",
+        )
+        (cursor_root / "mcp-configs").mkdir()
+        (cursor_root / "mcp-configs" / "mcp-servers.json").write_text(
+            "{ invalid json",
+            encoding="utf-8",
+        )
+
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        self.assertNotIn("bad-agent", registry.agents)
+        self.assertNotIn("invalid", registry.mcp_servers)
 
     def test_runtime_config_resolves_only_server_registered_components(self):
         registry = ExtensionRegistry(self.config_root, project_root=self.root)
-        agent, command = registry.resolve(None, None)
+        agent, command = registry.resolve("assistant", "chat")
 
-        runtime = registry.agent_runtime_config(agent, command, "Base instructions.")
+        runtime = registry.agent_runtime_config(
+            agent,
+            command,
+            "Base instructions.",
+            skill_ids=[],
+            mcp_server_ids=[],
+        )
 
-        self.assertEqual(runtime["skill_dirs"], [str(self.skills_root.resolve())])
-        self.assertEqual(runtime["mcp_servers"][0]["id"], "local-tools")
+        self.assertEqual(runtime["skill_dirs"], [])
+        self.assertEqual(runtime["selected_skill_ids"], [])
+        self.assertEqual(runtime["selected_skill_directories"], {})
+        self.assertEqual(runtime["mcp_servers"], [])
         self.assertIn("Base instructions.", runtime["system_prompt"])
         self.assertIn("Answer clearly.", registry.command_input(command, "hello"))
+
+    def test_command_input_composes_nested_command_instructions(self):
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+        root_command = {
+            "id": "root",
+            "name": "/root",
+            "prompt": "Root task: $ARGUMENTS",
+            "instruction": None,
+        }
+        nested_command = {
+            "id": "nested",
+            "name": "/nested",
+            "prompt": "Nested task: $ARGUMENTS",
+            "instruction": None,
+        }
+
+        result = registry.command_input(
+            root_command,
+            "analyze TSLA",
+            additional_commands=[nested_command],
+        )
+
+        self.assertIn("Root task: analyze TSLA", result)
+        self.assertIn("Nested task: analyze TSLA", result)
+
+    def test_stock_root_uses_the_mcp_config_path(self):
+        mcp_config_dir = self.root / "stock-server" / ".stock" / "mcp-configs"
+        mcp_config_dir.mkdir(parents=True, exist_ok=True)
+        (mcp_config_dir / "mcp-servers.json").write_text(
+            json.dumps({
+                "mcpServers": {
+                    "local-tools": {"command": "node"},
+                    "cursor-tools": {
+                        "command": "node",
+                        "args": ["server.js"],
+                        "env": {"API_KEY": "${CURSOR_TOOLS_KEY}"},
+                    },
+                    "remote-tools": {
+                        "type": "http",
+                        "url": "https://example.test/mcp",
+                        "headers": {"Authorization": "Bearer token"},
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+        legacy_mcp_dir = self.root / "stock-server" / ".stock" / "mcp"
+        legacy_mcp_dir.mkdir()
+        (legacy_mcp_dir / "legacy-tools.json").write_text(
+            json.dumps({
+                "servers": [
+                    {"id": "legacy-tools", "name": "Legacy tools", "command": "node"}
+                ]
+            }),
+            encoding="utf-8",
+        )
+
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        self.assertEqual(registry.mcp_servers["cursor-tools"]["name"], "cursor-tools")
+        self.assertEqual(registry.mcp_servers["cursor-tools"]["command"], "node")
+        self.assertEqual(registry.mcp_servers["cursor-tools"]["args"], ["server.js"])
+        self.assertEqual(registry.mcp_servers["remote-tools"]["url"], "https://example.test/mcp")
+        self.assertNotIn("legacy-tools", registry.mcp_servers)
+
+    def test_http_mcp_server_uses_streamable_http_transport(self):
+        observed = {}
+
+        async def fake_load_mcp_tools(session, *, connection, server_name):
+            observed["connection"] = connection
+            observed["server_name"] = server_name
+            return []
+
+        with patch("src.mcp.client.load_mcp_tools", side_effect=fake_load_mcp_tools):
+            load_mcp_tools_for_agent(
+                [{
+                    "id": "remote-tools",
+                    "type": "http",
+                    "url": "https://example.test/mcp",
+                    "headers": {"Authorization": "Bearer token"},
+                }]
+            )
+
+        self.assertEqual(observed["server_name"], "remote-tools")
+        self.assertEqual(
+            observed["connection"],
+            {
+                "transport": "streamable_http",
+                "url": "https://example.test/mcp",
+                "headers": {"Authorization": "Bearer token"},
+            },
+        )
 
     def test_unknown_agent_is_rejected(self):
         registry = ExtensionRegistry(self.config_root, project_root=self.root)
@@ -95,8 +281,8 @@ class ExtensionRegistryTests(unittest.TestCase):
             registry.resolve("not-registered", "chat")
 
     def test_unknown_skill_reference_fails_registry_initialization(self):
-        (self.root / ".github" / "agents" / "assistant.md").write_text(
-            "---\nname: assistant\ndisplay_name: Assistant\ndefault: true\n"
+        (self.root / "stock-server" / ".stock" / "agents" / "assistant.md").write_text(
+            "---\nname: assistant\ndisplay_name: Assistant\n"
             "skills: [missing]\n---\n",
             encoding="utf-8",
         )
@@ -105,18 +291,32 @@ class ExtensionRegistryTests(unittest.TestCase):
             ExtensionRegistry(self.config_root, project_root=self.root)
 
     def test_registered_hooks_are_validated_and_listed_without_command_details(self):
-        hooks_dir = self.root / ".github" / "hooks"
+        hooks_dir = self.root / "stock-server" / ".stock" / "hooks"
         hooks_dir.mkdir(parents=True)
+        (hooks_dir / "hooks.json").write_text(
+            json.dumps({
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": 'tool == "Bash"',
+                            "hooks": [
+                                {"type": "command", "command": "python -c \"print(1)\""}
+                            ],
+                            "description": "Audit chat",
+                        }
+                    ]
+                }
+            }),
+            encoding="utf-8",
+        )
         (hooks_dir / "audit.json").write_text(
             json.dumps({
                 "hooks": [
                     {
-                        "id": "audit-chat",
-                        "name": "Audit chat",
+                        "id": "legacy-audit",
+                        "name": "Legacy audit",
                         "event": "before_agent",
                         "command": ["python", "scripts/audit.py"],
-                        "agent_ids": ["assistant"],
-                        "command_ids": ["chat"],
                     }
                 ]
             }),
@@ -125,32 +325,204 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
-        self.assertEqual(registry.hooks["audit-chat"]["event"], "before_agent")
+        hook_id = "stock-pretooluse-0-0"
+        self.assertEqual(list(registry.hooks), [hook_id])
+        self.assertEqual(registry.hooks[hook_id]["event"], "PreToolUse")
         self.assertEqual(
             registry.catalog()["hooks"],
-            [{"id": "audit-chat", "name": "Audit chat", "event": "before_agent", "enabled": True}],
+            [{"id": hook_id, "name": "Audit chat", "event": "PreToolUse", "enabled": True}],
         )
 
-    def test_hook_rejects_unknown_agent_reference(self):
-        hooks_dir = self.root / ".cursor" / "hooks"
+    def test_native_hook_rejects_unsupported_matcher_expression(self):
+        hooks_dir = self.root / "stock-server" / ".stock" / "hooks"
         hooks_dir.mkdir(parents=True)
-        (hooks_dir / "audit.json").write_text(
+        (hooks_dir / "hooks.json").write_text(
             json.dumps({
-                "hooks": [
-                    {
-                        "id": "audit-chat",
-                        "name": "Audit chat",
-                        "event": "before_agent",
-                        "command": ["python", "scripts/audit.py"],
-                        "agent_ids": ["missing"],
-                    }
-                ]
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": 'tool != "Bash"',
+                            "hooks": [
+                                {"type": "command", "command": "python -c \"print(1)\""}
+                            ],
+                        }
+                    ]
+                }
             }),
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "unknown agent_id"):
+        with self.assertRaisesRegex(ValueError, "Invalid hook matcher"):
             ExtensionRegistry(self.config_root, project_root=self.root)
+
+    def test_native_hooks_json_registers_tool_events_and_matchers(self):
+        hooks_dir = self.root / "stock-server" / ".stock" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "hooks.json").write_text(
+            json.dumps({
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": 'tool == "Bash" && tool_input.command matches "git push"',
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f'"{sys.executable}" -c "print(1)"',
+                                }
+                            ],
+                            "description": "Check pushes",
+                        }
+                    ]
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        hook = next(hook for hook in registry.hooks.values() if hook["event"] == "PreToolUse")
+        self.assertEqual(hook["matcher"], 'tool == "Bash" && tool_input.command matches "git push"')
+        self.assertEqual(hook["command"], f'"{sys.executable}" -c "print(1)"')
+        self.assertTrue(hook["shell"])
+        self.assertEqual(hook["name"], "Check pushes")
+
+    def test_hook_runner_applies_native_matcher_before_running_command(self):
+        marker = self.root / "matched-hook.txt"
+        script = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran')"
+        runner = HookRunner(
+            {
+                "block-push": {
+                    "event": "PreToolUse",
+                    "matcher": (
+                        r'tool == "Write" && tool_input.file_path matches "\\.(md|txt)$" '
+                        r'&& !(tool_input.file_path matches "README\\.md|CLAUDE\\.md")'
+                    ),
+                    "command": [sys.executable, "-c", script, str(marker)],
+                }
+            },
+            str(self.root),
+        )
+
+        runner.run(
+            "PreToolUse",
+            {"tool": "Write", "tool_input": {"file_path": "README.md"}},
+            agent_id="assistant",
+            command_id=None,
+        )
+        self.assertFalse(marker.exists())
+
+        runner.run(
+            "PreToolUse",
+            {"tool": "Write", "tool_input": {"file_path": "notes.txt"}},
+            agent_id="assistant",
+            command_id=None,
+        )
+        self.assertEqual(marker.read_text(encoding="utf-8"), "ran")
+
+    def test_hook_runner_executes_native_shell_command(self):
+        marker = self.root / "native-shell-hook.txt"
+        script_path = self.root / "write_marker.py"
+        script_path.write_text(
+            "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran')",
+            encoding="utf-8",
+        )
+        runner = HookRunner(
+            {
+                "native-shell": {
+                    "event": "PreToolUse",
+                    "matcher": "*",
+                    "command": f'"{sys.executable}" "{script_path}" "{marker}"',
+                    "shell": True,
+                }
+            },
+            str(self.root),
+        )
+
+        runner.run(
+            "PreToolUse",
+            {"tool": "Bash", "tool_input": {"command": "git status"}},
+            agent_id="assistant",
+            command_id=None,
+        )
+
+        self.assertEqual(marker.read_text(encoding="utf-8"), "ran")
+
+    def test_native_hook_shell_receives_stock_plugin_root_environment(self):
+        runner = HookRunner(
+            {
+                "plugin-hook": {
+                    "event": "PreToolUse",
+                    "command": 'node "${STOCK_PLUGIN_ROOT}/stock-server/.stock/hooks/scripts/hooks/test.js"',
+                    "shell": True,
+                }
+            },
+            str(self.root),
+        )
+        result = type("ProcessResult", (), {"returncode": 0, "stderr": ""})()
+
+        with patch.dict(
+            os.environ,
+            {"STOCK_PLUGIN_ROOT": str(self.root / "wrong-plugin")},
+        ), patch("src.services.hook_runner.subprocess.run", return_value=result) as run:
+            runner.run(
+                "PreToolUse",
+                {"tool": "Bash", "tool_input": {"command": "git status"}},
+                agent_id="assistant",
+                command_id=None,
+            )
+
+        self.assertEqual(run.call_args.kwargs["env"]["STOCK_PLUGIN_ROOT"], str(self.root))
+        if os.name == "nt":
+            self.assertIn("%STOCK_PLUGIN_ROOT%", run.call_args.args[0])
+
+    def test_hook_tool_middleware_fires_around_agent_tool_calls(self):
+        events = []
+        contexts = []
+        middleware = HookToolMiddleware({}, str(self.root))
+        middleware.hook_runner.run = lambda event, context, **kwargs: (
+            events.append((event, context["tool"])),
+            contexts.append(context),
+        )
+        request = type(
+            "ToolRequest",
+            (),
+            {"tool_call": {"name": "execute", "args": {"command": "npm run dev"}}},
+        )()
+
+        result = middleware.wrap_tool_call(
+            request,
+            lambda tool_request: events.append(("tool", tool_request.tool_call["name"])) or "done",
+        )
+
+        self.assertEqual(result, "done")
+        self.assertEqual(
+            events,
+            [("PreToolUse", "Bash"), ("tool", "execute"), ("PostToolUse", "Bash")],
+        )
+        self.assertEqual(contexts[1]["tool_output"], {"output": "done"})
+
+    def test_pre_tool_hook_failure_prevents_tool_execution(self):
+        middleware = HookToolMiddleware(
+            {
+                "block-tool": {
+                    "event": "PreToolUse",
+                    "matcher": '*',
+                    "command": [sys.executable, "-c", "raise SystemExit(1)"],
+                }
+            },
+            str(self.root),
+        )
+        request = type(
+            "ToolRequest",
+            (),
+            {"tool_call": {"name": "execute", "args": {"command": "npm run dev"}}},
+        )()
+        executed = []
+
+        with self.assertRaises(HookExecutionError):
+            middleware.wrap_tool_call(request, lambda tool_request: executed.append(True))
+
+        self.assertEqual(executed, [])
 
     def test_hook_runner_passes_json_context_and_uses_registered_filters(self):
         output_path = self.root / "hook-context.json"
@@ -202,20 +574,19 @@ class ExtensionRegistryTests(unittest.TestCase):
                 command_id="chat",
             )
 
-    def test_discovers_project_definitions_across_supported_roots(self):
-        claude_root = self.root / ".claude"
-        agents_dir = claude_root / "agents"
-        commands_dir = claude_root / "commands" / "workflows"
-        skill_dir = claude_root / "skills" / "group" / "nested"
+    def test_discovers_only_stock_definitions(self):
+        stock_root = self.root / "stock-server" / ".stock"
+        agents_dir = stock_root / "agents"
+        commands_dir = stock_root / "commands" / "workflows"
+        skill_dir = stock_root / "skills" / "group" / "nested"
         github_root = self.root / ".github"
         cursor_root = self.root / ".cursor"
-        agents_dir.mkdir(parents=True)
+        agents_dir.mkdir(parents=True, exist_ok=True)
         commands_dir.mkdir(parents=True)
         skill_dir.mkdir(parents=True)
         (github_root / "agents").mkdir(parents=True, exist_ok=True)
         (github_root / "commands").mkdir(parents=True)
-        (github_root / "mcp").mkdir(parents=True, exist_ok=True)
-        (claude_root / "hooks").mkdir(parents=True)
+        (stock_root / "hooks").mkdir(parents=True)
         (cursor_root / "agents").mkdir(parents=True)
         (cursor_root / "commands").mkdir(parents=True)
         (agents_dir / "helper.md").write_text(
@@ -246,29 +617,31 @@ class ExtensionRegistryTests(unittest.TestCase):
             "---\ndescription: Cursor command.\n---\nRun the Cursor task.\n",
             encoding="utf-8",
         )
-        (github_root / "mcp" / "tools.json").write_text(
+        mcp_config_dir = stock_root / "mcp-configs"
+        mcp_config_dir.mkdir(parents=True, exist_ok=True)
+        (mcp_config_dir / "mcp-servers.json").write_text(
             json.dumps({
-                "servers": [
-                    {"id": "project-tools", "name": "Project tools", "command": "node"}
-                ]
+                "mcpServers": {
+                    "local-tools": {"command": "node"},
+                    "project-tools": {"command": "node"},
+                }
             }),
             encoding="utf-8",
         )
-        (claude_root / "hooks" / "audit.json").write_text(
+        (stock_root / "hooks" / "hooks.json").write_text(
             json.dumps({
-                "hooks": [
-                    {
-                        "id": "project-audit",
-                        "name": "Project audit",
-                        "event": "before_agent",
-                        "command": ["python", "scripts/audit.py"],
-                    }
-                ]
+                "hooks": {
+                    "PreToolUse": [],
+                    "SessionStart": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {"type": "command", "command": "python -c \"print(1)\""}
+                            ],
+                        }
+                    ],
+                }
             }),
-            encoding="utf-8",
-        )
-        (claude_root / "hooks" / "hooks.json").write_text(
-            json.dumps({"hooks": {"PreToolUse": []}}),
             encoding="utf-8",
         )
         external_root = self.root / "external"
@@ -288,35 +661,39 @@ class ExtensionRegistryTests(unittest.TestCase):
         agent, command = registry.resolve("helper-agent", "workflows/run")
         runtime = registry.agent_runtime_config(agent, command)
 
-        self.assertEqual(agent["prompt"], "Help with focused tasks.")
+        self.assertEqual(
+            registry.component_content("agent", "helper-agent"),
+            "Help with focused tasks.",
+        )
         self.assertEqual(command["name"], "/workflows/run")
         self.assertIn("Work on Analyze the project.", registry.command_input(command, "Analyze the project."))
-        self.assertIn(str((claude_root / "skills" / "group").resolve()), runtime["skill_dirs"])
+        self.assertIn(str((stock_root / "skills" / "group").resolve()), runtime["skill_dirs"])
         self.assertEqual(runtime["project_root"], str(self.root))
         self.assertIn("task", runtime["system_prompt"])
-        self.assertIn("github-helper", registry.agents)
-        self.assertIn("cursor-helper", registry.agents)
-        self.assertIn("github-task", registry.commands)
-        self.assertIn("cursor-task", registry.commands)
+        self.assertNotIn("github-helper", registry.agents)
+        self.assertNotIn("cursor-helper", registry.agents)
+        self.assertNotIn("github-task", registry.commands)
+        self.assertNotIn("cursor-task", registry.commands)
         self.assertIn("project-tools", registry.mcp_servers)
-        self.assertIn("project-audit", registry.hooks)
+        self.assertIn("SessionStart", {hook["event"] for hook in registry.hooks.values()})
         self.assertNotIn("external-agent", registry.agents)
 
-    def test_default_registry_scans_project_root_skills(self):
+    def test_default_registry_scans_project_root_extensions(self):
         registry = ExtensionRegistry()
 
         catalog = registry.catalog()
 
         self.assertIn("stock-analysis", [skill["id"] for skill in catalog["skills"]])
-        self.assertIn("stock-assistant", [agent["id"] for agent in catalog["agents"]])
+        self.assertIn("planner", [agent["id"] for agent in catalog["agents"]])
+        self.assertIn("github", registry.mcp_servers)
+        self.assertIn("PreToolUse", {hook["event"] for hook in registry.hooks.values()})
 
     def test_chat_works_without_project_commands(self):
-        (self.root / ".claude" / "commands" / "chat.md").unlink()
+        (self.root / "stock-server" / ".stock" / "commands" / "chat.md").unlink()
         registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
-        agent, command = registry.resolve(None, None)
+        agent, command = registry.resolve("assistant", None)
 
-        self.assertIsNone(registry.default_command_id)
         self.assertIsNone(command)
         self.assertEqual(registry.command_input(command, "hello"), "hello")
         self.assertEqual(
@@ -328,24 +705,53 @@ class ExtensionRegistryTests(unittest.TestCase):
         response = agent_catalog()
 
         self.assertEqual(response["code"], 0)
-        self.assertIn("股票分析师", [agent["name"] for agent in response["data"]["agents"]])
+        self.assertIn("Planner", [agent["name"] for agent in response["data"]["agents"]])
 
-    def test_api_uses_registered_agent_and_command(self):
-        request = AgentChatRequest(
-            question="检查构建",
-            agent_id="stock-analyst",
-            command_id=extension_registry.default_command_id,
+    def test_api_routes_question_to_registered_components(self):
+        request = AgentChatRequest(question="分析 TSLA")
+        selection = ComponentSelection(
+            agent_id="planner",
+            command_id=None,
+            skill_ids=["stock-analysis"],
+            mcp_server_ids=[],
         )
 
-        with patch("src.api.chat.ask_agent", return_value="分析完成") as ask_agent, patch(
+        resolved = ResolvedComponents(
+            command_ids=["plan"],
+            skill_ids=["stock-analysis"],
+            mcp_server_ids=[],
+            referenced_agent_ids=["architect"],
+        )
+        with patch("src.api.chat.select_components", return_value=selection), patch(
+            "src.api.chat.resolve_component_dependencies",
+            return_value=resolved,
+        ), patch("src.api.chat.make_llm", return_value=object()
+        ), patch("src.api.chat.ask_agent", return_value="分析完成") as ask_agent, patch(
             "src.api.chat.hook_runner.run"
         ) as run_hook:
             response = agent_chat(request)
 
         self.assertEqual(response["data"]["answer"], "分析完成")
-        self.assertEqual(response["data"]["agent_id"], "stock-analyst")
-        self.assertEqual(response["data"]["command_id"], extension_registry.default_command_id)
-        self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(".github\\skills"))
+        self.assertEqual(response["data"]["agent_id"], "planner")
+        self.assertIsNone(response["data"]["command_id"])
+        self.assertIn("## Referenced Command: /plan", ask_agent.call_args.args[0])
+        self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(".stock\\skills"))
+        self.assertEqual(
+            ask_agent.call_args.kwargs["config"].selected_skill_ids,
+            ["stock-analysis"],
+        )
+        self.assertEqual(
+            ask_agent.call_args.kwargs["config"].selected_skill_directories,
+            {
+                str((Path(extension_registry.project_root) / "stock-server" / ".stock" / "skills").resolve()):
+                ["stock-analysis"]
+            },
+        )
+        self.assertEqual(ask_agent.call_args.kwargs["config"].mcp_servers, [])
+        self.assertIn(
+            "architect",
+            ask_agent.call_args.kwargs["config"].system_prompt,
+        )
         self.assertEqual(
             [call.args[0] for call in run_hook.call_args_list],
             ["before_agent", "after_agent"],
@@ -353,8 +759,24 @@ class ExtensionRegistryTests(unittest.TestCase):
 
     def test_api_runs_error_hook_when_agent_fails(self):
         request = AgentChatRequest(question="hello")
+        selection = ComponentSelection(
+            agent_id="planner",
+            command_id=None,
+            skill_ids=[],
+            mcp_server_ids=[],
+        )
 
-        with patch("src.api.chat.ask_agent", side_effect=RuntimeError("agent failed")), patch(
+        resolved = ResolvedComponents(
+            command_ids=[],
+            skill_ids=[],
+            mcp_server_ids=[],
+            referenced_agent_ids=[],
+        )
+        with patch("src.api.chat.select_components", return_value=selection), patch(
+            "src.api.chat.resolve_component_dependencies",
+            return_value=resolved,
+        ), patch("src.api.chat.make_llm", return_value=object()
+        ), patch("src.api.chat.ask_agent", side_effect=RuntimeError("agent failed")), patch(
             "src.api.chat.hook_runner.run"
         ) as run_hook:
             with self.assertRaisesRegex(RuntimeError, "agent failed"):
@@ -365,13 +787,23 @@ class ExtensionRegistryTests(unittest.TestCase):
             ["before_agent", "on_error"],
         )
 
-    def test_api_rejects_unknown_agent(self):
-        request = AgentChatRequest(question="hello", agent_id="not-registered")
+    def test_api_surfaces_component_routing_failure(self):
+        request = AgentChatRequest(question="hello")
 
-        with self.assertRaises(HTTPException) as error:
-            agent_chat(request)
+        with patch(
+            "src.api.chat.select_components",
+            side_effect=ValueError("invalid router response"),
+        ), patch("src.api.chat.make_llm", return_value=object()):
+            with self.assertRaises(HTTPException) as error:
+                agent_chat(request)
 
-        self.assertEqual(error.exception.status_code, 404)
+        self.assertEqual(error.exception.status_code, 502)
+        self.assertIn("Component routing failed", error.exception.detail)
+
+    def test_chat_request_rejects_user_supplied_component_ids(self):
+        for field in ("agent_id", "command_id"):
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                AgentChatRequest(question="hello", **{field: "stock-analyst"})
 
     def test_chat_requests_get_unique_thread_ids_by_default(self):
         first = AgentChatRequest(question="first")

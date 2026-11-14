@@ -2,15 +2,17 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from src.agent.UnifiedAgent import AgentConfig, ask_agent, default_system_prompt
+from src.agent.UnifiedAgent import AgentConfig, ask_agent, default_system_prompt, make_llm
+from src.services.component_dependencies import resolve_component_dependencies
+from src.services.component_router import select_components
 from src.services.extension_registry import ExtensionRegistry
 from src.services.hook_runner import HookExecutionError, HookRunner
 
 app = FastAPI(title="StockAssistant Agent")
 extension_registry = ExtensionRegistry()
-hook_runner = HookRunner(extension_registry.hooks, str(extension_registry.config_root.parent))
+hook_runner = HookRunner(extension_registry.hooks, str(extension_registry.project_root))
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,15 +28,10 @@ def home():
     return {"message": "StockAssistant Agent 已启动"}
 
 
-@app.get("/hello")
-def hello():
-    return "hello world."
-
-
 class AgentChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     question: str = Field(..., description="用户提问")
-    agent_id: str | None = Field(default=None, description="已注册 Agent 的 ID")
-    command_id: str | None = Field(default=None, description="已注册 Command 的 ID")
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
 
 
@@ -50,15 +47,43 @@ def agent_catalog():
 @app.post("/agent/chat")
 def agent_chat(req: AgentChatRequest):
     try:
-        agent, command = extension_registry.resolve(req.agent_id, req.command_id)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        routing_model = make_llm(temperature=0)
+        selection = select_components(req.question, extension_registry, routing_model)
+        resolved = resolve_component_dependencies(
+            req.question,
+            selection,
+            extension_registry,
+            routing_model,
+        )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=502, detail=f"Component routing failed: {error}") from error
 
-    config = AgentConfig(**extension_registry.agent_runtime_config(agent, command, default_system_prompt()))
+    try:
+        agent, command = extension_registry.resolve(selection.agent_id, selection.command_id)
+    except (KeyError, ValueError) as error:
+        raise HTTPException(status_code=502, detail=f"Component routing failed: {error}") from error
 
-    question = extension_registry.command_input(command, req.question)
+    config = AgentConfig(
+        **extension_registry.agent_runtime_config(
+            agent,
+            command,
+            default_system_prompt(),
+            skill_ids=resolved.skill_ids,
+            mcp_server_ids=resolved.mcp_server_ids,
+            referenced_agent_ids=resolved.referenced_agent_ids,
+        )
+    )
+
+    additional_commands = [
+        extension_registry.commands[command_id]
+        for command_id in resolved.command_ids
+        if command_id != selection.command_id
+    ]
+    question = extension_registry.command_input(
+        command,
+        req.question,
+        additional_commands=additional_commands,
+    )
     hook_context = {
         "question": req.question,
         "agent_id": agent["id"],

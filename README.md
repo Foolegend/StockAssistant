@@ -24,58 +24,63 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 
 ## 🧩 扩展智能体
 
-- 自动扫描工程根目录下 `.github`、`.claude`、`.cursor` 中的扩展，不读取外部目录，也不使用 `CLAUDE_CONFIG_DIR`。
-- `.github/agents/**/*.md`、`.claude/agents/**/*.md`、`.cursor/agents/**/*.md`：自动发现 Agent，并注册为可选 Agent 和可委派子 Agent。
-- 三个目录下的 `commands/**/*.md`：自动发现 Command；默认名称为 `/命令路径`（可由 frontmatter 的 `name` 覆盖），正文作为工作流指令执行，`$ARGUMENTS` 会替换为用户输入。
-- 三个目录下的 `skills/**/SKILL.md`：递归发现 Skill，按 DeepAgents Skills middleware 加载；支持 Skill 子目录。
-- 三个目录下 `hooks/**/*.json` 的 `hooks` 数组和 `mcp/**/*.json` 的 `servers` 数组：自动发现项目 Hook 与 MCP server，格式与下方配置示例一致；不再读取 `stock-server/config` 中的 Hook/MCP 注册文件。
+- 仅扫描 `stock-server/.stock` 中的扩展，不加载工程根目录下的 `.github`、`.cursor`，也不读取外部目录或使用 `CLAUDE_CONFIG_DIR`。
+- `stock-server/.stock/agents/**/*.md`：自动发现 Agent，并注册为可选 Agent 和可委派子 Agent。
+- `stock-server/.stock/commands/**/*.md`：自动发现 Command；默认名称为 `/命令路径`（可由 frontmatter 的 `name` 覆盖），正文作为工作流指令执行，`$ARGUMENTS` 会替换为用户输入。
+- `stock-server/.stock/skills/**/SKILL.md`：递归发现 Skill，按 DeepAgents Skills middleware 加载；支持 Skill 子目录。
+- `stock-server/.stock/hooks/hooks.json`：读取原生事件、matcher 和 command 定义；`stock-server/.stock/mcp-configs/mcp-servers.json`：读取 `mcpServers` 配置并注册 MCP server。
+- Hook 脚本和共享工具位于 `stock-server/.stock/hooks/scripts/`，由 Hook 配置和 `setup-pm` Command 调用。
 
-前端加载 `GET /agent/catalog` 展示 Agent、Command、Skill、MCP 和 Hook 的已注册信息，再将选中的 Agent/Command ID 发送到 `POST /agent/chat`。用户不需要知道或手动输入 ID；服务端不接受客户端传入本地 Skill 路径或 MCP 启动命令。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
+`GET /agent/catalog` 提供已注册组件信息；聊天界面不要求用户选择或提交组件 ID。服务端扫描时只读取 Agent、Command、Skill 的 YAML frontmatter 和文件路径，用名称、描述等摘要进行初选；只在依赖解析或执行时读取已选组件的正文，不把未选组件的正文送入模型上下文。服务端还会递归检查已选 Agent、Command 和 Skill 的正文，解析其中显式或语义上引用的注册组件：嵌套 Command 合并为本轮指令，嵌套 Skill 加载到主 Agent，嵌套 Agent 提供为可委派子 Agent（由主 Agent 决定是否委派）。`POST /agent/chat` 只接收问题和会话 ID，并校验组件选择均来自注册表。客户端不接受或提交本地 Skill 路径、MCP 启动命令或组件 ID。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
 
-Command 无需额外 JSON 配置；默认使用 ID 为 `chat` 的命令，若未发现则使用扫描到的第一个命令。若没有发现命令，普通对话仍可不选择 Command 进行。
+Command 无需额外 JSON 配置；服务端根据问题选择适用命令，也可以不选择 Command 进行普通对话。
 
-Agent 无需额外 JSON 配置；通过 Agent Markdown frontmatter 中的 `skills` 和 `mcp_server_ids` 关联能力。可用 `default: true` 指定默认 Agent；未指定时优先使用 `stock-assistant`，否则选择扫描到的第一个 Agent。
+Agent 无需额外 JSON 配置；Agent Markdown frontmatter 可通过 `skills` 和 `mcp_server_ids` 声明关联能力。Agent、Command、Skill 和 MCP 的最终选择由服务端根据当前问题完成，不使用默认 Agent 或默认 Command。
 
-Agent、Command 和 Skill Markdown 是指令，不是 Claude Code 或 Cursor 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载，Command 正文作为本轮任务指令。定义中提及的工具只有在本平台实际配置后才能使用；Claude Code 原生 `settings.json` hooks、Cursor 配置、memory 和权限配置不会导入。只读取工程根目录扩展分类目录中的项目文件。
+Agent、Command 和 Skill Markdown 是指令，不是 Claude Code 或 Cursor 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载，Command 正文作为本轮任务指令。定义中提及的工具只有在本平台实际配置后才能使用；Claude Code 原生 `settings.json` hooks、Cursor 配置、memory 和权限配置不会导入。只读取仓库内上述扩展目录中的项目文件。
 
-Hook 无需服务端 JSON 配置文件；在 `.claude/hooks/`、`.cursor/hooks/` 或 `.github/hooks/` 下放置项目 JSON 文件，使用 `hooks` 数组登记。支持 `before_agent`、`after_agent` 和 `on_error`。每项必须包含唯一 `id`、`name`、`event` 和 argv 数组形式的 `command`，可用 `agent_ids` / `command_ids` 限定范围，以及 `timeout_seconds` 设置大于 0、最多 120 秒的运行时限。例如：
-
-```json
-{
-  "hooks": [
-    {
-      "id": "audit-chat",
-      "name": "审计对话",
-      "event": "before_agent",
-      "command": ["python", "scripts/audit_chat.py"],
-      "agent_ids": ["stock-assistant"],
-      "timeout_seconds": 10
-    }
-  ]
-}
-```
-
-Hook 以无 shell 的子进程运行，工作目录为 `stock-server`，继承后端环境变量；JSON 事件上下文通过 stdin 传递（包含用户问题，成功后事件还包含回答）。成功时 stdout 不作为 Agent 指令使用；非零退出或超时会使本次请求失败。不会导入或执行 `.claude/settings.json` 中的 hook 命令。Hook 能读取继承的环境变量并以服务端身份运行，只应放入可信的项目脚本，并在改动配置后重启后端。
-
-Agent frontmatter 中的模型选择目前不映射到其他模型；运行模型由 `stock-server/config/.env` 中的 `CHAT_MODEL` 决定。修改扩展文件后需重启后端以重新扫描。
-
-MCP server 无需服务端 JSON 配置文件；在 `.claude/mcp/`、`.cursor/mcp/` 或 `.github/mcp/` 下放置 JSON 文件，使用 `servers` 数组登记。例如：
+Hook 从扩展目录下的 `hooks/hooks.json` 加载，使用原生事件名、matcher 和 command 定义。例如：
 
 ```json
 {
-  "id": "local-weather",
-  "name": "本地天气工具",
-  "description": "查询天气",
-  "command": "node",
-  "args": ["mcp/weather-server.js"],
-  "cwd": ".",
-  "env": {
-    "WEATHER_API_KEY": "${WEATHER_API_KEY}"
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "tool == \"Bash\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python stock-server/.stock/hooks/scripts/audit_tool.py"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
 
-然后在 Agent frontmatter 的 `mcp_server_ids` 中引用 `"local-weather"`。MCP 配置是可信的服务端代码执行配置，只应注册经过审查的 server。
+`PreToolUse` 和 `PostToolUse` 会在工具调用前后执行；其他事件会被读取，但当前尚未连接到运行时触发点。命令在后端工作目录中以 shell 运行并继承后端环境变量，JSON 事件上下文通过 stdin 传递。`PreToolUse` 非零退出会阻止工具运行；命令非零退出或超时会使请求失败。Hook 以服务端身份执行，只应配置可信命令；`stock-server/.stock/settings.json` 不会被导入或执行。
+
+Agent frontmatter 中的模型选择目前不映射到其他模型；运行模型由 `stock-server/config/.env` 中的 `CHAT_MODEL` 决定。修改扩展文件后需重启后端以重新扫描。
+
+MCP server 在扩展目录下的 `mcp-configs/mcp-servers.json` 中登记，配置使用 `mcpServers` 对象。例如：
+
+```json
+{
+  "mcpServers": {
+    "local-weather": {
+      "command": "node",
+      "args": ["mcp/weather-server.js"],
+      "cwd": ".",
+      "env": {
+        "WEATHER_API_KEY": "${WEATHER_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+也支持通过 `type: "http"` 和 `url` 配置 HTTP MCP server。聊天时由服务端根据问题从已注册 server 中选择；MCP 配置可启动服务端进程或发起网络连接，只应注册经过审查的 server。
 
 修改 JSON 扩展配置后重启后端。当前会话检查点保存在进程内存中，后端重启会清空；跨重启的数据库持久化可作为后续扩展。
 
@@ -130,6 +135,6 @@ Copy-Item stock-server\config\.env.template stock-server\config\.env
 ## 📁 目录结构
 - `stock-server/`: 后端核心代码
   - `src/`: 源代码 (api, agent, brain, services)
-  - `.github/skills/`: 定义的各种 AI 技能
+  - `.stock/`: Agent、Command、Skill、Hook 和 MCP 扩展定义
 - `stock-ui/`: 前端界面代码
 - `.venv/`: Python 虚拟环境
