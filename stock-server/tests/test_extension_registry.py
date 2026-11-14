@@ -782,7 +782,11 @@ class ExtensionRegistryTests(unittest.TestCase):
             }],
         )
         self.assertIn("## Referenced Command: /plan", ask_agent.call_args.args[0])
-        self.assertTrue(ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(".stock\\skills"))
+        self.assertTrue(
+            ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(
+                os.path.join(".stock", "skills")
+            )
+        )
         self.assertEqual(
             ask_agent.call_args.kwargs["config"].selected_skill_ids,
             ["stock-analysis"],

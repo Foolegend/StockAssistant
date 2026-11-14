@@ -65,6 +65,76 @@ class UnifiedAgentTests(unittest.TestCase):
         self.assertIsInstance(middleware[0], SelectedSkillsMiddleware)
         self.assertEqual(middleware[0].selected_skill_ids, ("stock-analysis",))
 
+    def test_skill_dirs_use_backend_virtual_paths(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            skills_dir = Path(project_root) / "stock-server" / ".stock" / "skills"
+            skills_dir.mkdir(parents=True)
+            config = AgentConfig(
+                skill_dirs=[str(skills_dir)],
+                project_root=project_root,
+                mcp_servers=[],
+            )
+            with patch("src.agent.UnifiedAgent.make_llm"), patch(
+                "src.agent.UnifiedAgent.create_deep_agent"
+            ) as create_deep_agent:
+                build_agent(config)
+
+        self.assertEqual(
+            create_deep_agent.call_args.kwargs["skills"],
+            ["/stock-server/.stock/skills"],
+        )
+
+    def test_selected_skills_use_backend_virtual_paths(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            skills_dir = Path(project_root) / "stock-server" / ".stock" / "skills"
+            skills_dir.mkdir(parents=True)
+            config = AgentConfig(
+                skill_dirs=[str(skills_dir)],
+                project_root=project_root,
+                selected_skill_ids=["stock-analysis"],
+                selected_skill_directories={str(skills_dir): ["stock-analysis"]},
+                mcp_servers=[],
+            )
+            with patch("src.agent.UnifiedAgent.make_llm"), patch(
+                "src.agent.UnifiedAgent.create_deep_agent"
+            ) as create_deep_agent:
+                build_agent(config)
+
+        self.assertIsNone(create_deep_agent.call_args.kwargs["skills"])
+        middleware = create_deep_agent.call_args.kwargs["middleware"]
+        self.assertIsInstance(middleware[0], SelectedSkillsMiddleware)
+        self.assertEqual(middleware[0].sources, ["/stock-server/.stock/skills"])
+        self.assertEqual(
+            middleware[0]._filtered_backend._directories_by_source,
+            {"/stock-server/.stock/skills": {"stock-analysis"}},
+        )
+
+    def test_subagent_skill_paths_use_backend_virtual_paths(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            skills_dir = Path(project_root) / "stock-server" / ".stock" / "skills"
+            skills_dir.mkdir(parents=True)
+            config = AgentConfig(
+                skill_dirs=[],
+                project_root=project_root,
+                subagents=[
+                    {
+                        "name": "helper",
+                        "description": "helper agent",
+                        "skills": [str(skills_dir)],
+                    }
+                ],
+                mcp_servers=[],
+            )
+            with patch("src.agent.UnifiedAgent.make_llm"), patch(
+                "src.agent.UnifiedAgent.create_deep_agent"
+            ) as create_deep_agent:
+                build_agent(config)
+
+        self.assertEqual(
+            create_deep_agent.call_args.kwargs["subagents"][0]["skills"],
+            ["/stock-server/.stock/skills"],
+        )
+
     def test_missing_explicit_skill_directory_is_not_silently_ignored(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = AgentConfig(skill_dirs=[str(Path(temp_dir) / "missing-skills")])

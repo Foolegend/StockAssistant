@@ -42,6 +42,25 @@ def _normalize_path(path: Optional[str]) -> Optional[str]:
     return os.path.normpath(value)
 
 
+def _to_backend_path(path: str, root: str) -> str:
+    """Convert a host path under ``root`` to the backend's virtual path.
+
+    ``LocalShellBackend(virtual_mode=True)`` resolves every file operation
+    relative to ``root``, so ``/repo/stock-server/.stock/skills`` must be passed
+    as ``/stock-server/.stock/skills``.  Without this, ``SkillsMiddleware``
+    looks for ``<root>/<absolute path>`` and reports ``path_not_found``.
+
+    Paths outside ``root`` cannot be represented; they are returned unchanged.
+    """
+    try:
+        relative = os.path.relpath(path, root)
+    except ValueError:  # different drive on Windows
+        return path
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return path
+    return "/" + relative.replace(os.sep, "/")
+
+
 @dataclass
 class AgentConfig:
     model_name: Optional[str] = None
@@ -137,8 +156,11 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
     llm = make_llm(model_name=model_name, temperature=cfg.temperature)
 
     skill_dirs = ensure_skill_dirs(cfg.skill_dirs)
-    mcp_tools = load_mcp_tools_from_servers(cfg.mcp_servers)
     project_root = _normalize_path(cfg.project_root) or PROJECT_ROOT
+    # SkillsMiddleware 通过 backend 读文件；virtual_mode 下路径相对 project_root，
+    # 必须把宿主机绝对路径转成后端虚拟路径，否则技能目录会报 path_not_found。
+    skill_dirs = [_to_backend_path(path, project_root) for path in skill_dirs]
+    mcp_tools = load_mcp_tools_from_servers(cfg.mcp_servers)
     logger.info(
         "building agent model=%s temperature=%s skill_dirs=%s selected_skills=%s "
         "mcp_servers=%s mcp_tools=%s hooks=%d subagents=%d project_root=%s",
@@ -172,23 +194,36 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
     )
     middleware = [HookToolMiddleware(cfg.hooks or {}, project_root)]
     if cfg.selected_skill_ids is not None:
+        directories_by_source = cfg.selected_skill_directories
+        if directories_by_source is not None:
+            directories_by_source = {
+                _to_backend_path(source, project_root): directories
+                for source, directories in directories_by_source.items()
+            }
         middleware.insert(
             0,
             SelectedSkillsMiddleware(
                 backend,
                 skill_dirs,
                 cfg.selected_skill_ids,
-                cfg.selected_skill_directories,
+                directories_by_source,
             ),
         )
         skill_dirs = None
+
+    subagents = [
+        {**spec, "skills": [_to_backend_path(path, project_root) for path in spec["skills"]]}
+        if spec.get("skills")
+        else spec
+        for spec in (cfg.subagents or [])
+    ]
 
     agent = create_deep_agent(
         model=llm,
         tools=mcp_tools,
         middleware=middleware,
         skills=skill_dirs,
-        subagents=cfg.subagents or None,
+        subagents=subagents or None,
         backend=backend,
         system_prompt=cfg.system_prompt or default_system_prompt(),
         checkpointer=MemorySaver(),

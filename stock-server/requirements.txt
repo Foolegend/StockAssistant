@@ -1,0 +1,18 @@
+# StockAssistant 后端直接依赖
+# 已在 Python 3.14 验证通过；README 要求 Python 3.12+
+# 安装：.venv/bin/python -m pip install -r stock-server/requirements.txt
+
+# Web 服务
+fastapi==0.162.7
+uvicorn==0.54.0
+pydantic==2.14.3
+python-dotenv==1.2.4
+PyYAML==6.0.3
+
+# Agent / LLM
+langchain==1.5.0
+langchain-core==1.8.0
+langchain-openai==1.8.0
+langchain-mcp-adapters==0.3.2
+langgraph==1.2.21
+deepagents==0.7.38

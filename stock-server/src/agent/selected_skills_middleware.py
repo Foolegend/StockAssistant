@@ -55,6 +55,10 @@ class SelectedSkillsMiddleware(SkillsMiddleware):
                 for source, directories in directories_by_source.items()
             },
         )
+        # deepagents 0.7.x 的 SkillsMiddleware 直接使用 self._backend，不再经过
+        # _get_backend()；这里把过滤后端设为实际后端，否则未选中的技能目录也会
+        # 被 ls/download 读取，过滤只能在元数据阶段事后进行。
+        self._backend = self._filtered_backend
 
     def _get_backend(self, state, runtime, config):
         return self._filtered_backend

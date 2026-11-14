@@ -154,6 +154,21 @@ def _attach(logger: logging.Logger, handler: logging.Handler) -> None:
     logger.addHandler(handler)
 
 
+def _drop_uvicorn_console_handlers() -> None:
+    """Remove the stderr handlers uvicorn installs before importing the app.
+
+    Uvicorn configures its own loggers first, so when console logging is
+    disabled those handlers are the only thing still writing to the terminal.
+    Dropping them lets uvicorn records reach the log file through the handler
+    attached to the ``uvicorn`` logger in :func:`setup_logging`.
+    """
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        logger = logging.getLogger(name)
+        for handler in list(logger.handlers):
+            if not getattr(handler, _HANDLER_MARKER, False):
+                logger.removeHandler(handler)
+
+
 _configured = False
 
 
@@ -186,6 +201,8 @@ def setup_logging(
         console_handler.setFormatter(formatter)
         console_handler.addFilter(request_filter)
         _attach(root, console_handler)
+    else:
+        _drop_uvicorn_console_handlers()
 
     file_handler = _build_file_handler(Path(log_dir) if log_dir else DEFAULT_LOG_DIR)
     if file_handler is not None:

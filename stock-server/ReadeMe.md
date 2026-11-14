@@ -41,3 +41,13 @@ Select-String -Path logs\stock-server.log -Pattern 'thread_id=8f3c'
 | `STOCK_LOG_MAX_BYTES` | `10485760` | 单个日志文件大小上限 |
 | `STOCK_LOG_BACKUPS` | `5` | 轮转保留文件数 |
 | `STOCK_LOG_CONSOLE` | `1` | 设为 `0` 关闭控制台输出 |
+
+`start_server.sh` / `start_server.ps1` 默认设置 `STOCK_LOG_CONSOLE=0`：日志只写入 `logs/stock-server.log`（包括 uvicorn 的启动/关闭信息），控制台不再刷屏。需要临时查看控制台日志时：
+
+```bash
+STOCK_LOG_CONSOLE=1 ./start_server.sh
+```
+
+```powershell
+$env:STOCK_LOG_CONSOLE = "1"; .\start_server.ps1
+```
