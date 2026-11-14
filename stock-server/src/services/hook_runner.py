@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
+from langchain_core.messages import ToolMessage
 
 from src.runtime.encoding import decode_output
 from src.runtime.logging_config import get_logger, preview
@@ -21,9 +22,16 @@ class HookExecutionError(RuntimeError):
 
 
 class HookRunner:
-    def __init__(self, hooks: dict[str, dict[str, Any]], working_directory: str) -> None:
+    def __init__(
+        self,
+        hooks: dict[str, dict[str, Any]],
+        working_directory: str,
+        *,
+        plugin_root: str | None = None,
+    ) -> None:
         self.hooks = hooks
         self.working_directory = working_directory
+        self.plugin_root = plugin_root or working_directory
 
     def run(
         self,
@@ -51,7 +59,7 @@ class HookRunner:
 
             matched_any = True
             hook_env = os.environ.copy()
-            hook_env["STOCK_PLUGIN_ROOT"] = self.working_directory
+            hook_env["STOCK_PLUGIN_ROOT"] = self.plugin_root
             command = hook["command"]
             if hook.get("shell", False) and os.name == "nt":
                 command = command.replace(
@@ -144,8 +152,18 @@ class HookToolMiddleware(AgentMiddleware):
         "write_file": "Write",
     }
 
-    def __init__(self, hooks: dict[str, dict[str, Any]], working_directory: str) -> None:
-        self.hook_runner = HookRunner(hooks, working_directory)
+    def __init__(
+        self,
+        hooks: dict[str, dict[str, Any]],
+        working_directory: str,
+        *,
+        plugin_root: str | None = None,
+    ) -> None:
+        self.hook_runner = HookRunner(
+            hooks,
+            working_directory,
+            plugin_root=plugin_root,
+        )
 
     @staticmethod
     def _thread_id(request: ToolCallRequest) -> str:
@@ -216,14 +234,35 @@ class HookToolMiddleware(AgentMiddleware):
             (time.perf_counter() - started) * 1000,
             preview(tool_output),
         )
-        self.hook_runner.run(
-            "PostToolUse",
-            {
-                **hook_context,
-                "tool_output": {"output": tool_output},
-                "tool_response": tool_output,
-            },
-            agent_id="",
-            command_id=None,
-        )
+        try:
+            self.hook_runner.run(
+                "PostToolUse",
+                {
+                    **hook_context,
+                    "tool_output": {"output": tool_output},
+                    "tool_response": tool_output,
+                },
+                agent_id="",
+                command_id=None,
+            )
+        except HookExecutionError as error:
+            # A post-tool validation failure must not abort the whole agent run
+            # (and surface as a 500). Hand the rejection back to the model as a
+            # failed tool result so it can correct the call and retry.
+            logger.error(
+                "post tool hook rejected output tool=%s thread_id=%s duration=%.1f ms: %s",
+                tool_name,
+                thread_id,
+                (time.perf_counter() - started) * 1000,
+                error,
+            )
+            return ToolMessage(
+                content=(
+                    f"Tool '{tool_name}' output was rejected by a post-tool hook: "
+                    f"{error}. Do not use this output; fix the command and retry."
+                ),
+                tool_call_id=str(tool_call.get("id") or ""),
+                name=tool_name,
+                status="error",
+            )
         return result

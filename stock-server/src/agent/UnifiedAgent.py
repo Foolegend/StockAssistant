@@ -25,6 +25,7 @@ setup_logging()
 logger = get_logger(__name__)
 settings = get_settings()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PLUGIN_ROOT = os.path.abspath(os.path.join(PROJECT_ROOT, os.pardir))
 ENV_PATH = settings["env_path"]
 DEFAULT_SKILLS_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "..", ".github", "skills"))
 _AGENT_CACHE = {}
@@ -192,7 +193,13 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
         timeout=120,
         max_output_bytes=100000,
     )
-    middleware = [HookToolMiddleware(cfg.hooks or {}, project_root)]
+    middleware = [
+        HookToolMiddleware(
+            cfg.hooks or {},
+            project_root,
+            plugin_root=PLUGIN_ROOT,
+        )
+    ]
     if cfg.selected_skill_ids is not None:
         directories_by_source = cfg.selected_skill_directories
         if directories_by_source is not None:

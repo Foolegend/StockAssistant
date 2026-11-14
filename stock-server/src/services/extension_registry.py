@@ -229,6 +229,7 @@ class ExtensionRegistry:
                 skill_ids = metadata.get("skills", [])
                 server_ids = metadata.get("mcp_server_ids", [])
                 display_name = metadata.get("display_name") or agent_id.replace("-", " ").title()
+                workspace_root = metadata.get("workspace_root")
                 if (
                     not isinstance(description, str)
                     or not isinstance(skill_ids, list)
@@ -237,8 +238,31 @@ class ExtensionRegistry:
                     or not all(isinstance(item, str) for item in server_ids)
                     or not isinstance(display_name, str)
                     or not display_name.strip()
+                    or (
+                        workspace_root is not None
+                        and (not isinstance(workspace_root, str) or not workspace_root.strip())
+                    )
                 ):
                     raise ValueError(f"Invalid Agent metadata in {agent_file}")
+                agent_root = self.project_root
+                if workspace_root is not None:
+                    workspace_path = Path(workspace_root)
+                    if workspace_path.is_absolute():
+                        raise ValueError(
+                            f"Agent '{agent_id}' workspace_root must be relative to the project root"
+                        )
+                    agent_root = (self.project_root / workspace_path).resolve()
+                    if (
+                        (
+                            agent_root != self.project_root
+                            and self.project_root not in agent_root.parents
+                        )
+                        or not agent_root.is_dir()
+                    ):
+                        raise ValueError(
+                            f"Agent '{agent_id}' workspace_root must be an existing directory "
+                            "inside the project root"
+                        )
                 self.agents[agent_id] = {
                     "id": agent_id,
                     "name": display_name,
@@ -248,7 +272,7 @@ class ExtensionRegistry:
                     "file_path": str(agent_file.resolve()),
                     "source_type": "project",
                 }
-                self.agent_source_roots[agent_id] = self.project_root
+                self.agent_source_roots[agent_id] = agent_root
 
             for command_file in sorted((config_dir / "commands").rglob("*.md")):
                 metadata = _read_markdown_metadata(command_file)

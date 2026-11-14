@@ -8,6 +8,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ROOT = $PSScriptRoot
+$InitialLocation = (Get-Location).Path
 $ServerHost = "127.0.0.1"
 $ServerPort = 8015
 $serverProc = $null
@@ -49,6 +50,7 @@ function Test-PortOpen {
 # Ctrl+C 等终止情况也尽量清理后端进程
 trap {
     Stop-Backend
+    Set-Location -LiteralPath $InitialLocation
     exit 1
 }
 
@@ -89,4 +91,5 @@ catch {
 }
 finally {
     Stop-Backend
+    Set-Location -LiteralPath $InitialLocation
 }

@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from fastapi import HTTPException
+from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from src.api.chat import AgentChatRequest, agent_chat, agent_catalog, extension_registry
@@ -16,6 +17,7 @@ from src.mcp.client import load_mcp_tools_for_agent
 from src.services.component_dependencies import ResolvedComponents
 from src.services.component_router import ComponentSelection
 from src.services.extension_registry import ExtensionRegistry
+from src.services.hook_matcher import matches_hook
 from src.services.hook_runner import HookExecutionError, HookRunner, HookToolMiddleware
 
 
@@ -564,6 +566,36 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         self.assertEqual(executed, [])
 
+    def test_post_tool_hook_failure_returns_a_tool_error_instead_of_raising(self):
+        middleware = HookToolMiddleware(
+            {
+                "reject-output": {
+                    "event": "PostToolUse",
+                    "matcher": "*",
+                    "command": [sys.executable, "-c", "raise SystemExit(1)"],
+                }
+            },
+            str(self.root),
+        )
+        request = type(
+            "ToolRequest",
+            (),
+            {
+                "tool_call": {
+                    "id": "call-1",
+                    "name": "execute",
+                    "args": {"command": "python stock_data_fetcher.py --stocks TSLA"},
+                }
+            },
+        )()
+
+        result = middleware.wrap_tool_call(request, lambda tool_request: "payload")
+
+        self.assertIsInstance(result, ToolMessage)
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.tool_call_id, "call-1")
+        self.assertIn("rejected by a post-tool hook", result.content)
+
     def test_hook_runner_passes_json_context_and_uses_registered_filters(self):
         output_path = self.root / "hook-context.json"
         script = (
@@ -724,9 +756,59 @@ class ExtensionRegistryTests(unittest.TestCase):
         catalog = registry.catalog()
 
         self.assertIn("stock-analysis", [skill["id"] for skill in catalog["skills"]])
-        self.assertIn("planner", [agent["id"] for agent in catalog["agents"]])
+        self.assertEqual(
+            [agent["id"] for agent in catalog["agents"]],
+            ["stock-analyst"],
+        )
+        self.assertEqual(
+            [command["id"] for command in catalog["commands"]],
+            ["analyze-stock"],
+        )
+        self.assertEqual(catalog["commands"][0]["name"], "/analyze-stock")
         self.assertIn("github", registry.mcp_servers)
-        self.assertIn("PreToolUse", {hook["event"] for hook in registry.hooks.values()})
+        self.assertEqual(len(registry.hooks), 1)
+        stock_data_hook = next(iter(registry.hooks.values()))
+        self.assertEqual(stock_data_hook["event"], "PostToolUse")
+        self.assertTrue(matches_hook(
+            stock_data_hook["matcher"],
+            {
+                "tool": "Bash",
+                "tool_input": {
+                    "command": "python /tmp/stock_data_fetcher.py --stocks TSLA"
+                },
+            },
+        ))
+        self.assertFalse(matches_hook(
+            stock_data_hook["matcher"],
+            {"tool": "Bash", "tool_input": {"command": "python some_other_script.py"}},
+        ))
+
+    def test_stock_analyst_workspace_is_limited_to_skill_files(self):
+        agent = extension_registry.agents["stock-analyst"]
+
+        runtime = extension_registry.agent_runtime_config(agent, None)
+
+        self.assertEqual(
+            runtime["project_root"],
+            str(
+                (
+                    Path(extension_registry.project_root)
+                    / "stock-server"
+                    / ".stock"
+                    / "skills"
+                ).resolve()
+            ),
+        )
+
+    def test_agent_workspace_root_cannot_escape_project_root(self):
+        agent_file = self.root / "stock-server" / ".stock" / "agents" / "assistant.md"
+        agent_file.write_text(
+            "---\nname: assistant\nworkspace_root: ..\n---\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "workspace_root"):
+            ExtensionRegistry(self.config_root, project_root=self.root)
 
     def test_chat_works_without_project_commands(self):
         (self.root / "stock-server" / ".stock" / "commands" / "chat.md").unlink()
@@ -745,22 +827,25 @@ class ExtensionRegistryTests(unittest.TestCase):
         response = agent_catalog()
 
         self.assertEqual(response["code"], 0)
-        self.assertIn("Planner", [agent["name"] for agent in response["data"]["agents"]])
+        self.assertEqual(
+            [agent["name"] for agent in response["data"]["agents"]],
+            ["Stock Analyst"],
+        )
 
     def test_api_routes_question_to_registered_components(self):
         request = AgentChatRequest(question="分析 TSLA")
         selection = ComponentSelection(
-            agent_id="planner",
+            agent_id="stock-analyst",
             command_id=None,
             skill_ids=["stock-analysis"],
             mcp_server_ids=[],
         )
 
         resolved = ResolvedComponents(
-            command_ids=["plan"],
+            command_ids=[],
             skill_ids=["stock-analysis"],
             mcp_server_ids=[],
-            referenced_agent_ids=["architect"],
+            referenced_agent_ids=[],
         )
         with patch("src.api.chat.select_components", return_value=selection), patch(
             "src.api.chat.resolve_component_dependencies",
@@ -772,7 +857,7 @@ class ExtensionRegistryTests(unittest.TestCase):
             response = agent_chat(request)
 
         self.assertEqual(response["data"]["answer"], "分析完成")
-        self.assertEqual(response["data"]["agent_id"], "planner")
+        self.assertEqual(response["data"]["agent_id"], "stock-analyst")
         self.assertIsNone(response["data"]["command_id"])
         self.assertEqual(
             response["data"]["skills"],
@@ -781,7 +866,7 @@ class ExtensionRegistryTests(unittest.TestCase):
                 "name": extension_registry.skills["stock-analysis"]["name"],
             }],
         )
-        self.assertIn("## Referenced Command: /plan", ask_agent.call_args.args[0])
+        self.assertEqual(ask_agent.call_args.args[0], "分析 TSLA")
         self.assertTrue(
             ask_agent.call_args.kwargs["config"].skill_dirs[0].endswith(
                 os.path.join(".stock", "skills")
@@ -800,18 +885,79 @@ class ExtensionRegistryTests(unittest.TestCase):
         )
         self.assertEqual(ask_agent.call_args.kwargs["config"].mcp_servers, [])
         self.assertIn(
-            "architect",
+            "stock-analysis",
             ask_agent.call_args.kwargs["config"].system_prompt,
+        )
+        self.assertEqual(
+            ask_agent.call_args.kwargs["config"].project_root,
+            str(
+                (
+                    Path(extension_registry.project_root)
+                    / "stock-server"
+                    / ".stock"
+                    / "skills"
+                ).resolve()
+            ),
         )
         self.assertEqual(
             [call.args[0] for call in run_hook.call_args_list],
             ["before_agent", "after_agent"],
         )
 
-    def test_api_runs_error_hook_when_agent_fails(self):
-        request = AgentChatRequest(question="hello")
+    def test_stock_analysis_command_loads_skill_and_passes_user_request(self):
+        request = AgentChatRequest(question="/analyze-stock TSLA")
         selection = ComponentSelection(
-            agent_id="planner",
+            agent_id="stock-analyst",
+            command_id="analyze-stock",
+            skill_ids=[],
+            mcp_server_ids=[],
+        )
+        resolved = ResolvedComponents(
+            command_ids=["analyze-stock"],
+            skill_ids=["stock-analysis"],
+            mcp_server_ids=[],
+            referenced_agent_ids=[],
+        )
+
+        with patch("src.api.chat.select_components", return_value=selection), patch(
+            "src.api.chat.resolve_component_dependencies",
+            return_value=resolved,
+        ), patch("src.api.chat.make_llm", return_value=object()), patch(
+            "src.api.chat.ask_agent", return_value="分析完成"
+        ) as ask_agent, patch("src.api.chat.hook_runner.run"):
+            response = agent_chat(request)
+
+        self.assertEqual(response["data"]["command_id"], "analyze-stock")
+        self.assertEqual(response["data"]["skills"][0]["id"], "stock-analysis")
+        self.assertIn("@skill:stock-analysis", ask_agent.call_args.args[0])
+        self.assertIn("/analyze-stock TSLA", ask_agent.call_args.args[0])
+        self.assertEqual(
+            ask_agent.call_args.kwargs["config"].selected_skill_ids,
+            ["stock-analysis"],
+        )
+
+    def test_api_answers_greeting_without_routing_or_inspecting_project(self):
+        request = AgentChatRequest(question=" 你好。 ", thread_id="greeting-thread")
+
+        with patch("src.api.chat.select_components") as select_components, patch(
+            "src.api.chat.make_llm"
+        ) as make_llm, patch("src.api.chat.ask_agent") as ask_agent, patch(
+            "src.api.chat.hook_runner.run"
+        ) as run_hook:
+            response = agent_chat(request)
+
+        self.assertEqual(response["data"]["answer"], "你好！有什么我可以帮你？")
+        self.assertIsNone(response["data"]["agent_id"])
+        self.assertEqual(response["data"]["thread_id"], "greeting-thread")
+        select_components.assert_not_called()
+        make_llm.assert_not_called()
+        ask_agent.assert_not_called()
+        run_hook.assert_not_called()
+
+    def test_api_runs_error_hook_when_agent_fails(self):
+        request = AgentChatRequest(question="hello, help me debug a failing endpoint")
+        selection = ComponentSelection(
+            agent_id="stock-analyst",
             command_id=None,
             skill_ids=[],
             mcp_server_ids=[],
@@ -839,7 +985,7 @@ class ExtensionRegistryTests(unittest.TestCase):
         )
 
     def test_api_surfaces_component_routing_failure(self):
-        request = AgentChatRequest(question="hello")
+        request = AgentChatRequest(question="hello, help me debug a failing endpoint")
 
         with patch(
             "src.api.chat.select_components",

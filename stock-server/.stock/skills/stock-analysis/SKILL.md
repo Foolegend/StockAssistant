@@ -84,20 +84,27 @@ metadata:
 file_read("references/stock_data_fetcher.py")
 ```
 
-2. 写入临时文件：
+2. 写入临时文件（项目根目录下的 `tmp/`，不要用 `/tmp/`）：
 ```
-Write → /tmp/stock_data_fetcher.py
+Write → tmp/stock_data_fetcher.py
 ```
 
-3. 执行（先尝试直接运行，加 --news 可同时搜索新闻）：
+3. 执行（工作目录是项目根目录，用 `python`；先尝试直接运行，加 --news 可同时搜索新闻）：
 ```bash
-python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+python tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 ```
 
 4. 如果出现 ImportError（缺少依赖），自动安装后重试：
 ```bash
-pip3 install akshare yfinance efinance --quiet && python3 /tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+python -m pip install akshare yfinance efinance --quiet && python tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 ```
+
+### 执行约束（必须遵守）
+
+- **不要把 stdout 重定向到文件**（`>` / `>>`）：数据新鲜度 hook 需要从命令输出中读取 JSON，重定向会导致校验无从进行。
+- **不要用 `;` 串联命令**：本运行时在 Windows 上通过 cmd.exe 执行，`;` 不是命令分隔符，会被当成脚本参数（argparse 报 `unrecognized arguments` 并退出 2）。需要串联时用 `&&`，或分多次调用。
+- **不要用 `tail` / `cat` / `head` 等 Unix 工具**；读取文件请使用 `read_file` 工具。
+- 临时脚本统一放在项目 `tmp/` 下，用相对路径执行。
 
 5. 脚本输出 JSON，包含：每只股票的实时行情、技术指标、综合评分、使用的数据源、新闻（如有API Key）
 6. 输出中的 `data_sources` 字段会显示各数据源的可用状态，方便诊断

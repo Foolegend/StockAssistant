@@ -1,3 +1,4 @@
+import re
 import time
 from uuid import uuid4
 
@@ -24,6 +25,11 @@ logger = get_logger(__name__)
 app = FastAPI(title="StockAssistant Agent")
 extension_registry = ExtensionRegistry()
 hook_runner = HookRunner(extension_registry.hooks, str(extension_registry.project_root))
+_GREETING_ONLY = re.compile(
+    r"^(?:你好|你好呀|您好|您好呀|嗨|哈喽|hello|hi|hey|goodmorning|"
+    r"goodafternoon|goodevening)$",
+    re.IGNORECASE,
+)
 
 logger.info(
     "extension registry loaded: root=%s agents=%d commands=%d skills=%d mcp_servers=%d hooks=%d",
@@ -97,6 +103,11 @@ def agent_catalog():
     }
 
 
+def _is_greeting_only(question: str) -> bool:
+    normalized = re.sub(r"[\s，。！？、,.!?;；:：]+", "", question).casefold()
+    return bool(_GREETING_ONLY.fullmatch(normalized))
+
+
 @app.post("/agent/chat")
 def agent_chat(req: AgentChatRequest):
     logger.info(
@@ -104,6 +115,22 @@ def agent_chat(req: AgentChatRequest):
         req.thread_id,
         preview(req.question),
     )
+    if _is_greeting_only(req.question):
+        answer = "你好！有什么我可以帮你？"
+        logger.info("chat greeting handled without component routing thread_id=%s", req.thread_id)
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "answer": answer,
+                "agent_id": None,
+                "command_id": None,
+                "skills": [],
+                "model": None,
+                "thread_id": req.thread_id,
+            },
+        }
+
     try:
         routing_model = make_llm(temperature=0)
         selection = select_components(req.question, extension_registry, routing_model)

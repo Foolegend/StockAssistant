@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agent.UnifiedAgent import AgentConfig, build_agent
+from src.agent.UnifiedAgent import AgentConfig, PLUGIN_ROOT, build_agent
 from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.services.hook_runner import HookToolMiddleware
 
@@ -47,6 +47,28 @@ class UnifiedAgentTests(unittest.TestCase):
         middleware = create_deep_agent.call_args.kwargs["middleware"]
         self.assertIsInstance(middleware[0], HookToolMiddleware)
         self.assertEqual(middleware[0].hook_runner.hooks, hooks)
+
+    def test_hook_plugin_root_is_independent_of_agent_workspace(self):
+        with tempfile.TemporaryDirectory() as workspace_root:
+            config = AgentConfig(
+                project_root=workspace_root,
+                skill_dirs=[],
+                mcp_servers=[],
+                hooks={},
+            )
+            with patch("src.agent.UnifiedAgent.make_llm"), patch(
+                "src.agent.UnifiedAgent.create_deep_agent"
+            ) as create_deep_agent:
+                build_agent(config)
+
+        middleware = create_deep_agent.call_args.kwargs["middleware"]
+        hook_middleware = next(
+            middleware_item
+            for middleware_item in middleware
+            if isinstance(middleware_item, HookToolMiddleware)
+        )
+        self.assertEqual(hook_middleware.hook_runner.working_directory, workspace_root)
+        self.assertEqual(hook_middleware.hook_runner.plugin_root, PLUGIN_ROOT)
 
     def test_selected_skill_ids_use_filtering_middleware(self):
         with tempfile.TemporaryDirectory() as skill_root:
