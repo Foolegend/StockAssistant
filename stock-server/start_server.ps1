@@ -1,4 +1,4 @@
-# 设置编码，防止中文乱码（控制台与 Python 输出都统一为 UTF-8）
+﻿# 设置编码，防止中文乱码（控制台与 Python 输出都统一为 UTF-8）
 chcp 65001 > $null
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

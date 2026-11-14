@@ -1,4 +1,4 @@
-# 设置编码，防止中文乱码
+﻿# 设置编码，防止中文乱码
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # 1. 进入前端项目根目录

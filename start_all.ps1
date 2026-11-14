@@ -1,4 +1,4 @@
-# StockAssistant 一键启动：后端 + 前端（Windows）
+﻿# StockAssistant 一键启动：后端 + 前端（Windows）
 # 后端在后台运行，前端占用当前终端；Ctrl+C 会同时停止两者。
 $ErrorActionPreference = "Stop"
 
