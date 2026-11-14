@@ -6,8 +6,11 @@ from typing import Any, Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from src.runtime.logging_config import get_logger
 from src.services.component_router import ComponentSelection
 
+
+logger = get_logger(__name__)
 
 MAX_DEPENDENCY_DEPTH = 8
 MAX_DEPENDENCY_COMPONENTS = 32
@@ -198,12 +201,21 @@ def _infer_references(
     if raw_references is None:
         # No usable tool call: fall back to "no nested dependency" instead of
         # failing the whole request.
+        logger.warning("dependency inference fell back to no dependencies: model returned no tool call")
         return []
 
     try:
-        return ComponentReferenceBatch.model_validate(raw_references).references
-    except ValidationError:
+        references = ComponentReferenceBatch.model_validate(raw_references).references
+    except ValidationError as error:
+        logger.warning("dependency inference returned an invalid batch: %s", error)
         return []
+
+    if references:
+        logger.debug(
+            "dependency inference suggested %s",
+            [(ref.component_type, ref.component_id) for ref in references],
+        )
+    return references
 
 
 def resolve_component_dependencies(

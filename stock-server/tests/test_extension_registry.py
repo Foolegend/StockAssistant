@@ -458,7 +458,11 @@ class ExtensionRegistryTests(unittest.TestCase):
             },
             str(self.root),
         )
-        result = type("ProcessResult", (), {"returncode": 0, "stderr": ""})()
+        result = type(
+            "ProcessResult",
+            (),
+            {"returncode": 0, "stdout": b"", "stderr": b""},
+        )()
 
         with patch.dict(
             os.environ,
@@ -500,6 +504,42 @@ class ExtensionRegistryTests(unittest.TestCase):
             [("PreToolUse", "Bash"), ("tool", "execute"), ("PostToolUse", "Bash")],
         )
         self.assertEqual(contexts[1]["tool_output"], {"output": "done"})
+
+    def test_tool_middleware_logs_the_skill_file_being_read(self):
+        middleware = HookToolMiddleware({}, str(self.root))
+        middleware.hook_runner.run = lambda *args, **kwargs: None
+        request = type(
+            "ToolRequest",
+            (),
+            {
+                "tool_call": {
+                    "name": "read_file",
+                    "args": {"file_path": ".stock/skills/stock-analysis/SKILL.md"},
+                }
+            },
+        )()
+
+        with self.assertLogs("src.services.hook_runner", level="INFO") as captured:
+            middleware.wrap_tool_call(request, lambda tool_request: "content")
+
+        self.assertTrue(
+            any("skill load skill=stock-analysis" in line for line in captured.output)
+        )
+
+    def test_tool_middleware_logs_the_mcp_server_of_a_tool_call(self):
+        middleware = HookToolMiddleware({}, str(self.root))
+        middleware.hook_runner.run = lambda *args, **kwargs: None
+        tool = type("Tool", (), {"metadata": {"mcp_server": "market-data"}})()
+        request = type(
+            "ToolRequest",
+            (),
+            {"tool_call": {"name": "quote", "args": {"symbol": "TSLA"}}, "tool": tool},
+        )()
+
+        with self.assertLogs("src.services.hook_runner", level="INFO") as captured:
+            middleware.wrap_tool_call(request, lambda tool_request: "42")
+
+        self.assertTrue(any("mcp_server=market-data" in line for line in captured.output))
 
     def test_pre_tool_hook_failure_prevents_tool_execution(self):
         middleware = HookToolMiddleware(

@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from threading import RLock
 from typing import List, Optional, Sequence
@@ -16,9 +17,12 @@ from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.config.settings import get_settings
 from src.mcp.client import load_mcp_tools_for_agent
 from src.runtime.encoding import install_tolerant_subprocess
+from src.runtime.logging_config import get_logger, preview, setup_logging
 from src.services.hook_runner import HookToolMiddleware
 
 
+setup_logging()
+logger = get_logger(__name__)
 settings = get_settings()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ENV_PATH = settings["env_path"]
@@ -128,12 +132,26 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
         if hasattr(cfg, key):
             setattr(cfg, key, value)
 
+    started = time.perf_counter()
     model_name = cfg.model_name or os.getenv("CHAT_MODEL") or "gpt-oss:120b-cloud"
     llm = make_llm(model_name=model_name, temperature=cfg.temperature)
 
     skill_dirs = ensure_skill_dirs(cfg.skill_dirs)
     mcp_tools = load_mcp_tools_from_servers(cfg.mcp_servers)
     project_root = _normalize_path(cfg.project_root) or PROJECT_ROOT
+    logger.info(
+        "building agent model=%s temperature=%s skill_dirs=%s selected_skills=%s "
+        "mcp_servers=%s mcp_tools=%s hooks=%d subagents=%d project_root=%s",
+        model_name,
+        cfg.temperature,
+        skill_dirs,
+        cfg.selected_skill_ids,
+        cfg.mcp_servers,
+        [tool.name for tool in mcp_tools],
+        len(cfg.hooks or {}),
+        len(cfg.subagents or []),
+        project_root,
+    )
 
     backend = LocalShellBackend(
         root_dir=project_root,
@@ -176,6 +194,7 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
         checkpointer=MemorySaver(),
         debug=cfg.debug,
     )
+    logger.info("agent built in %.1f ms", (time.perf_counter() - started) * 1000)
     return agent
 
 
@@ -200,18 +219,41 @@ def _cached_agent(config: Optional[AgentConfig]):
 
     with _AGENT_CACHE_LOCK:
         if fingerprint not in _AGENT_CACHE:
+            logger.info("agent cache miss fingerprint=%s", fingerprint[:12])
             _AGENT_CACHE[fingerprint] = build_agent(cfg)
+        else:
+            logger.debug("agent cache hit fingerprint=%s", fingerprint[:12])
         return _AGENT_CACHE[fingerprint]
 
 
 def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: str = "default") -> str:
     agent = _cached_agent(config)
-    result = agent.invoke(
-        {"messages": [{"role": "user", "content": question}]},
-        config={"configurable": {"thread_id": thread_id}},
+    logger.info(
+        "agent invoke thread_id=%s question=%s",
+        thread_id,
+        preview(question),
     )
+    started = time.perf_counter()
+    try:
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": question}]},
+            config={"configurable": {"thread_id": thread_id}},
+        )
+    except Exception:
+        logger.exception(
+            "agent invoke failed thread_id=%s after %.1f ms",
+            thread_id,
+            (time.perf_counter() - started) * 1000,
+        )
+        raise
 
     messages = result.get("messages", []) if isinstance(result, dict) else []
+    logger.info(
+        "agent finished thread_id=%s messages=%d duration=%.1f ms",
+        thread_id,
+        len(messages),
+        (time.perf_counter() - started) * 1000,
+    )
     if not messages:
         return ""
 

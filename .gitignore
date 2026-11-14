@@ -169,3 +169,6 @@ stock-server/config/.env
 
 # ReCode local database
 .recode
+
+# Runtime logs
+stock-server/logs/

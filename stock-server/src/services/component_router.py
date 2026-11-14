@@ -4,6 +4,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from src.runtime.logging_config import get_logger
+
+
+logger = get_logger(__name__)
+
 
 class ComponentSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -84,12 +89,14 @@ def select_components(question: str, registry: Any, model: Any) -> ComponentSele
 
     try:
         selection = invoke_selection()
-    except ValidationError:
+    except ValidationError as error:
+        logger.warning("router returned an invalid selection, retrying: %s", error)
         selection = invoke_selection("the response did not satisfy the required schema")
         return _validate_selection(selection, registry)
 
     try:
         return _validate_selection(selection, registry)
     except ValueError as error:
+        logger.warning("router selection failed validation, retrying: %s", error)
         selection = invoke_selection(str(error))
         return _validate_selection(selection, registry)

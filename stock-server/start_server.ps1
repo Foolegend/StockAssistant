@@ -1,5 +1,9 @@
-# 设置编码，防止中文乱码
+# 设置编码，防止中文乱码（控制台与 Python 输出都统一为 UTF-8）
+chcp 65001 > $null
 $OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 
 # 1. 获取当前脚本所在目录 (d:\project\StockAssistant\stock-server)
 $BACK_ROOT = $PSScriptRoot
@@ -25,6 +29,8 @@ Write-Host "--------------------------------------------------" -ForegroundColor
 Write-Host "🚀 正在启动 StockAssistant 后端服务..." -ForegroundColor Cyan
 Write-Host "端口: http://127.0.0.1:8015" -ForegroundColor Yellow
 Write-Host "API 文档: http://127.0.0.1:8015/docs" -ForegroundColor Yellow
+Write-Host "日志文件: $BACK_ROOT\logs\stock-server.log" -ForegroundColor Yellow
 Write-Host "--------------------------------------------------" -ForegroundColor Cyan
 
-& $PYTHON_EXE -m uvicorn src.api.chat:app --host 127.0.0.1 --port 8015
+# --no-access-log: 请求日志由应用的请求中间件统一输出（带 request id 与耗时）
+& $PYTHON_EXE -m uvicorn src.api.chat:app --host 127.0.0.1 --port 8015 --no-access-log

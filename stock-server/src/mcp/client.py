@@ -3,11 +3,40 @@ import os
 import sys
 from pathlib import Path
 
+from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import StdioConnection
 from langchain_mcp_adapters.tools import load_mcp_tools
 
+from src.runtime.logging_config import get_logger
 
+
+logger = get_logger(__name__)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _tag_server(tool: BaseTool, server_name: str) -> BaseTool:
+    """Record which MCP server a tool belongs to so every call can be traced."""
+    metadata = {**(getattr(tool, "metadata", None) or {}), "mcp_server": server_name}
+    return tool.model_copy(update={"metadata": metadata})
+
+
+def _with_sync_invocation(tool: BaseTool) -> BaseTool:
+    """Give async-only MCP tools a synchronous entrypoint.
+
+    ``load_mcp_tools`` builds ``StructuredTool`` instances that only define a
+    coroutine, so a synchronous agent (``agent.invoke``) fails with
+    ``NotImplementedError: StructuredTool does not support sync invocation``.
+    LangGraph executes synchronous tools in worker threads that have no running
+    event loop, so the coroutine can safely be driven there.
+    """
+    coroutine = getattr(tool, "coroutine", None)
+    if coroutine is None or getattr(tool, "func", None) is not None:
+        return tool
+
+    def _run(**kwargs):
+        return asyncio.run(coroutine(**kwargs))
+
+    return tool.model_copy(update={"func": _run})
 
 
 def load_mcp_tools_for_agent(mcp_servers):
@@ -69,12 +98,29 @@ def load_mcp_tools_for_agent(mcp_servers):
 
                 server_name = server.get("id") or server.get("name")
 
-            tools.extend(
-                await load_mcp_tools(
+            try:
+                server_tools = await load_mcp_tools(
                     None,
                     connection=connection,
                     server_name=server_name,
                 )
+            except Exception:
+                logger.exception(
+                    "MCP server %s failed to load (transport=%s)",
+                    server_name,
+                    connection["transport"],
+                )
+                raise
+
+            logger.info(
+                "MCP server %s loaded (transport=%s tools=%s)",
+                server_name,
+                connection["transport"],
+                [tool.name for tool in server_tools],
+            )
+            tools.extend(
+                _with_sync_invocation(_tag_server(tool, server_name))
+                for tool in server_tools
             )
         return tools
 
