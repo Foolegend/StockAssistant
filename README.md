@@ -93,18 +93,38 @@ MCP server 在扩展目录下的 `mcp-configs/mcp-servers.json` 中登记，配�
 - Node.js (LTS) & npm
 - Ollama (若使用本地模型)
 
-### 1. 启动后端
+### 一键启动前后端
+在项目根目录执行脚本，脚本会先启动后端并等待其就绪，再启动前端：
+
+```powershell
+.\start_all.ps1
+```
+
+Linux / macOS:
+
+```bash
+bash ./start_all.sh
+```
+
+前端访问 `http://localhost:4200`，后端 API 文档访问 `http://127.0.0.1:8015/docs`。前端运行期间按 `Ctrl+C` 可同时停止前后端。
+
+首次运行时，脚本会按需安装前端依赖；后端依赖需已安装在项目虚拟环境中。
+
+### 分别启动（可选）
+需要单独调试服务时，可分别启动：
+
+#### 启动后端
 ```powershell
 cd stock-server
 # 激活虚拟环境 (如果尚未激活)
 # & "..\.venv\Scripts\Activate.ps1"
 
-# 执行一键启动脚本
+# 启动后端
 .\start_server.ps1
 ```
 后端服务将运行在: `http://127.0.0.1:8015`
 
-### 2. 启动前端
+#### 启动前端
 ```powershell
 cd stock-ui
 # 安装依赖 (仅首次运行)
