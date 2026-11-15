@@ -22,6 +22,6 @@ describe('App', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.logo')?.textContent).toContain('Stock AI');
+    expect(compiled.querySelector('.logo')?.textContent).toContain('Investment Analysis');
   });
 });
