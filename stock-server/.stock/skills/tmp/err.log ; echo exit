@@ -1,2 +1,0 @@
-usage: stock_data_fetcher.py [-h] --stocks STOCKS [--days DAYS] [--news]
-stock_data_fetcher.py: error: unrecognized arguments: =$?

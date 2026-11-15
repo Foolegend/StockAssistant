@@ -13,6 +13,7 @@ PyYAML==6.0.3
 langchain==1.5.0
 langchain-core==1.8.0
 langchain-openai==1.8.0
+openai==2.33.0
 langchain-mcp-adapters==0.3.2
 langgraph==1.2.21
 deepagents==0.7.38

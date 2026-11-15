@@ -34,15 +34,15 @@ metadata:
       │
       ▼
 [STEP 2] 运行 Python 数据脚本 → JSON（行情 + 技术指标 + 评分）
-      │   Read references/stock_data_fetcher.py → Write /tmp/ → Bash 执行
+      │   直接运行技能自带的 stock_data_fetcher.py → JSON
       ▼
 [STEP 3] WebSearch 搜索每只股票最新新闻（2-3条/股）
       │
       ▼
-[STEP 4] 综合分析（Read references/analysis-prompt-template.md）
+[STEP 4] 综合分析（Read 技能目录下的 references/analysis-prompt-template.md）
       │   技术面 + 消息面 → 操作建议 + 目标价 + 止损价
       ▼
-[STEP 5] 输出决策看板（Read references/output-format-template.md）
+[STEP 5] 输出决策看板（Read 技能目录下的 references/output-format-template.md）
 ```
 
 ## STEP 1: 解析输入
@@ -79,35 +79,57 @@ metadata:
 
 ## STEP 2: 运行数据脚本
 
-1. 读取脚本：
+脚本已随技能提供，**直接在原位置运行，不要复制到 `.tmp/`，也不要改写脚本内容**。
+
+本技能目录（下文简称"技能目录"）：
 ```
-file_read("references/stock_data_fetcher.py")
+stock-server/.stock/skills/stock-analysis
+```
+如果本 SKILL.md 是从别的目录加载的，把下面命令里的这个前缀换成实际所在目录即可。
+
+1. 需要了解参数或排错时，再读取脚本：
+```
+file_read("stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py")
 ```
 
-2. 写入临时文件（项目根目录下的 `tmp/`，不要用 `/tmp/`）：
-```
-Write → tmp/stock_data_fetcher.py
-```
-
-3. 执行（工作目录是项目根目录，用 `python`；先尝试直接运行，加 --news 可同时搜索新闻）：
+2. 运行（工作目录 = 仓库根目录；路径统一用 `/` 分隔，Windows 和 Linux 都支持）：
 ```bash
-python tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+# Windows (cmd)
+python stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+
+# Linux / macOS（没有 python 就用 python3）
+python3 stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+```
+- 服务端已注入 `PYTHON_EXEC`，也可直接用它：Windows `%PYTHON_EXEC%`，Linux/macOS `"$PYTHON_EXEC"`。
+- `--days` 默认 120；`--news` 仅在配置了 Tavily/SerpAPI Key 时才真正联网搜索。
+
+3. 出现 ImportError（缺少依赖）时，用当前平台的解释器安装后重试（不要用 `pip3`，统一用 `python -m pip`）：
+```bash
+# Windows (cmd)
+python -m pip install akshare yfinance efinance --quiet && python stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+
+# Linux / macOS
+python3 -m pip install akshare yfinance efinance --quiet && python3 stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 ```
 
-4. 如果出现 ImportError（缺少依赖），自动安装后重试：
-```bash
-python -m pip install akshare yfinance efinance --quiet && python tmp/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
-```
+4. 脚本输出 JSON，包含：每只股票的实时行情、技术指标、综合评分、使用的数据源、新闻（如有 API Key）。
+5. 输出中的 `data_sources` 显示各数据源可用状态，`errors` 列出失败代码及原因，便于诊断。
 
 ### 执行约束（必须遵守）
 
 - **不要把 stdout 重定向到文件**（`>` / `>>`）：数据新鲜度 hook 需要从命令输出中读取 JSON，重定向会导致校验无从进行。
 - **不要用 `;` 串联命令**：本运行时在 Windows 上通过 cmd.exe 执行，`;` 不是命令分隔符，会被当成脚本参数（argparse 报 `unrecognized arguments` 并退出 2）。需要串联时用 `&&`，或分多次调用。
 - **不要用 `tail` / `cat` / `head` 等 Unix 工具**；读取文件请使用 `read_file` 工具。
-- 临时脚本统一放在项目 `tmp/` 下，用相对路径执行。
-
-5. 脚本输出 JSON，包含：每只股票的实时行情、技术指标、综合评分、使用的数据源、新闻（如有API Key）
-6. 输出中的 `data_sources` 字段会显示各数据源的可用状态，方便诊断
+- **正常流程不需要临时文件**：脚本只把 JSON 打印到 stdout。只有排查问题、写额外探针或保存中间结果时才使用临时文件。
+- **临时文件统一放在仓库根目录的 `.tmp/` 下**：
+  - 创建目录用 Python（跨平台，且避免 Windows cmd 下 `mkdir -p` 多建出一个 `-p` 目录）：
+    ```bash
+    python -c "import os; os.makedirs('.tmp', exist_ok=True)"
+    ```
+  - 之后统一用相对路径 `.tmp/xxx` 写入、读取和执行。
+- **文件工具与 shell 的路径规则**：`write_file` / `read_file` / `ls` 的 `file_path` 和 `execute` 的 `command` 都用相对路径（`.tmp/xxx` 或 `stock-server/...`）。虚拟文件系统的 `/` 就是仓库根，**不要**传 `D:\...` 或 `/d/project/...`，否则文件会被写进根目录下的 `d/` 文件夹，导致 shell 找不到。
+  - 本环境的 `pwd` 是 Git 的 `pwd.exe`，输出形如 `/d/project/StockAssistant`，**这个形式不能用于文件工具**。工作目录本来就是仓库根，直接用相对路径即可，不需要用 `pwd` 去拼绝对路径。
+- **禁止在其他位置创建临时目录或临时文件**：包括技能目录（如 `.stock/skills/tmp/`）、`large_tool_results/`、`d/`、随手建的 `tmp/`。
 
 ## STEP 3: 新闻搜索
 
@@ -124,7 +146,7 @@ python -m pip install akshare yfinance efinance --quiet && python tmp/stock_data
 
 1. 读取分析框架：
 ```
-file_read("references/analysis-prompt-template.md")
+file_read("stock-server/.stock/skills/stock-analysis/references/analysis-prompt-template.md")
 ```
 
 2. 按照框架，对每只股票进行综合分析：
@@ -142,7 +164,7 @@ file_read("references/analysis-prompt-template.md")
 
 1. 读取格式模板：
 ```
-file_read("references/output-format-template.md")
+file_read("stock-server/.stock/skills/stock-analysis/references/output-format-template.md")
 ```
 
 2. 按模板格式输出完整决策看板，包含：
@@ -155,7 +177,7 @@ file_read("references/output-format-template.md")
 | 场景 | 处理方式 |
 |------|----------|
 | 股票代码无法识别 | 提示用户正确格式，给出示例 |
-| Python 依赖缺失 | 自动 `pip3 install akshare yfinance --quiet` |
+| Python 依赖缺失 | 自动 `python -m pip install akshare yfinance efinance --quiet`（跨平台，不要用 `pip3`） |
 | 某只股票数据获取失败 | 跳过并提示，继续分析其他股票 |
 | 市场休市/无数据 | 使用最近交易日数据 |
 | WebSearch 无结果 | 注明"近期无重大消息"，仍基于技术面分析 |

@@ -7,14 +7,20 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agent.UnifiedAgent import AgentConfig, PLUGIN_ROOT, build_agent
+from src.agent.UnifiedAgent import AgentConfig, PLUGIN_ROOT, build_agent, make_llm
 from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.services.hook_runner import HookToolMiddleware
 
 
 class UnifiedAgentTests(unittest.TestCase):
     def test_agent_config_accepts_model_and_components(self):
-        skill_dir = Path(__file__).resolve().parents[2] / ".github" / "skills" / "stock-analysis"
+        skill_dir = (
+            Path(__file__).resolve().parents[2]
+            / "stock-server"
+            / ".stock"
+            / "skills"
+            / "stock-analysis"
+        )
         config = AgentConfig(
             model_name="gpt-oss:120b-cloud",
             skill_dirs=[str(skill_dir)],
@@ -156,6 +162,16 @@ class UnifiedAgentTests(unittest.TestCase):
             create_deep_agent.call_args.kwargs["subagents"][0]["skills"],
             ["/stock-server/.stock/skills"],
         )
+
+    def test_make_llm_configures_retries_and_timeout(self):
+        with patch.dict(
+            os.environ,
+            {"OPENAI_MAX_RETRIES": "7", "OPENAI_TIMEOUT_SECONDS": "90"},
+        ):
+            llm = make_llm()
+
+        self.assertEqual(llm.max_retries, 7)
+        self.assertEqual(llm.request_timeout, 90)
 
     def test_missing_explicit_skill_directory_is_not_silently_ignored(self):
         with tempfile.TemporaryDirectory() as temp_dir:

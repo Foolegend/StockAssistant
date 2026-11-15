@@ -4,6 +4,9 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from langchain_core.messages import HumanMessage, SystemMessage
+from openai import RateLimitError
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent.UnifiedAgent import AgentConfig, ask_agent, default_system_prompt, make_llm
@@ -82,6 +85,31 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RateLimitError)
+async def handle_rate_limit(request: Request, exc: RateLimitError):
+    """Return a clean 429 instead of a 500 stack trace when the LLM is throttled."""
+    headers = {}
+    response = getattr(exc, "response", None)
+    retry_after = response.headers.get("retry-after") if response is not None else None
+    if retry_after:
+        headers["Retry-After"] = retry_after
+    logger.warning(
+        "model rate limited path=%s status=%s retry_after=%s",
+        request.url.path,
+        getattr(exc, "status_code", None),
+        retry_after,
+    )
+    return JSONResponse(
+        status_code=429,
+        content={
+            "code": 429,
+            "message": "模型服务触发限流（429 RPM 超限），请稍后重试",
+            "data": None,
+        },
+        headers=headers,
+    )
+
+
 @app.get("/")
 def home():
     return {"message": "StockAssistant Agent 已启动"}
@@ -108,6 +136,21 @@ def _is_greeting_only(question: str) -> bool:
     return bool(_GREETING_ONLY.fullmatch(normalized))
 
 
+def _answer_directly(question: str) -> str:
+    """Answer a simple conversational message with the model, skipping routing."""
+    response = make_llm().invoke(
+        [
+            SystemMessage(content=default_system_prompt()),
+            HumanMessage(content=question),
+        ]
+    )
+    content = response.content
+    if isinstance(content, list):
+        content = "\n".join(str(item) for item in content)
+    answer = str(content).strip()
+    return answer or "抱歉，我暂时没有生成回复，请稍后再试。"
+
+
 @app.post("/agent/chat")
 def agent_chat(req: AgentChatRequest):
     logger.info(
@@ -116,8 +159,12 @@ def agent_chat(req: AgentChatRequest):
         preview(req.question),
     )
     if _is_greeting_only(req.question):
-        answer = "你好！有什么我可以帮你？"
-        logger.info("chat greeting handled without component routing thread_id=%s", req.thread_id)
+        answer = _answer_directly(req.question)
+        logger.info(
+            "chat greeting answered directly by model thread_id=%s answer=%s",
+            req.thread_id,
+            preview(answer),
+        )
         return {
             "code": 0,
             "message": "success",
@@ -225,12 +272,20 @@ def agent_chat(req: AgentChatRequest):
             command_id=command["id"] if command else None,
         )
     except Exception as error:
-        logger.exception(
-            "chat failed thread_id=%s agent=%s command=%s",
-            req.thread_id,
-            agent["id"],
-            command["id"] if command else None,
-        )
+        if isinstance(error, RateLimitError):
+            logger.warning(
+                "chat rate limited thread_id=%s agent=%s command=%s",
+                req.thread_id,
+                agent["id"],
+                command["id"] if command else None,
+            )
+        else:
+            logger.exception(
+                "chat failed thread_id=%s agent=%s command=%s",
+                req.thread_id,
+                agent["id"],
+                command["id"] if command else None,
+            )
         try:
             hook_runner.run(
                 "on_error",

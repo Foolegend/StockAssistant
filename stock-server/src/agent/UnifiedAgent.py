@@ -3,6 +3,8 @@ import json
 import os
 import sys
 import time
+
+from openai import RateLimitError
 from dataclasses import dataclass
 from threading import RLock
 from typing import List, Optional, Sequence
@@ -117,6 +119,11 @@ def make_llm(model_name: Optional[str] = None, temperature: float = 0.2):
         temperature=temperature,
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         openai_api_base=os.getenv("OPENAI_API_BASE"),
+        # Providers such as MiniMax answer 429 when the per-minute quota is
+        # exhausted.  The SDK retries 429/5xx automatically; raise the default
+        # (2) so short RPM spikes are absorbed instead of failing the request.
+        max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "5")),
+        request_timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "120")),
     )
 
 
@@ -281,6 +288,14 @@ def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: st
             {"messages": [{"role": "user", "content": question}]},
             config={"configurable": {"thread_id": thread_id}},
         )
+    except RateLimitError as error:
+        logger.warning(
+            "agent invoke rate limited thread_id=%s after %.1f ms status=%s",
+            thread_id,
+            (time.perf_counter() - started) * 1000,
+            getattr(error, "status_code", None),
+        )
+        raise
     except Exception:
         logger.exception(
             "agent invoke failed thread_id=%s after %.1f ms",

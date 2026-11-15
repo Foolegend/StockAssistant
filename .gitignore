@@ -161,11 +161,14 @@ cython_debug/
 .idea/
 
 # Temporary files
+# 临时脚本/中间产物统一放在仓库根目录的 .tmp/ 下
+.tmp/
+large_tool_results/
+# 以下为历史遗留位置，仅作兜底，禁止再使用
 stock-server/tmp/
 /tmp/
 .vscode/
 stock-server/config/.env
-.tmp/
 
 # ReCode local database
 .recode

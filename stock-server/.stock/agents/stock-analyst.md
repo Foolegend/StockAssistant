@@ -4,7 +4,6 @@ display_name: Stock Analyst
 description: Analyze A-share, Hong Kong, and US stocks using the registered stock-analysis skill.
 skills:
   - stock-analysis
-workspace_root: stock-server/.stock/skills
 ---
 
 You are StockAssistant's stock-analysis assistant.

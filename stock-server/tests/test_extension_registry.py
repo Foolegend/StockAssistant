@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from fastapi import HTTPException
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
 
 from src.api.chat import AgentChatRequest, agent_chat, agent_catalog, extension_registry
@@ -765,7 +765,7 @@ class ExtensionRegistryTests(unittest.TestCase):
             ["analyze-stock"],
         )
         self.assertEqual(catalog["commands"][0]["name"], "/analyze-stock")
-        self.assertIn("github", registry.mcp_servers)
+        self.assertEqual(list(registry.mcp_servers), ["sequential-thinking"])
         self.assertEqual(len(registry.hooks), 1)
         stock_data_hook = next(iter(registry.hooks.values()))
         self.assertEqual(stock_data_hook["event"], "PostToolUse")
@@ -783,21 +783,14 @@ class ExtensionRegistryTests(unittest.TestCase):
             {"tool": "Bash", "tool_input": {"command": "python some_other_script.py"}},
         ))
 
-    def test_stock_analyst_workspace_is_limited_to_skill_files(self):
+    def test_stock_analyst_workspace_uses_project_root(self):
         agent = extension_registry.agents["stock-analyst"]
 
         runtime = extension_registry.agent_runtime_config(agent, None)
 
         self.assertEqual(
             runtime["project_root"],
-            str(
-                (
-                    Path(extension_registry.project_root)
-                    / "stock-server"
-                    / ".stock"
-                    / "skills"
-                ).resolve()
-            ),
+            str(extension_registry.project_root),
         )
 
     def test_agent_workspace_root_cannot_escape_project_root(self):
@@ -890,14 +883,7 @@ class ExtensionRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             ask_agent.call_args.kwargs["config"].project_root,
-            str(
-                (
-                    Path(extension_registry.project_root)
-                    / "stock-server"
-                    / ".stock"
-                    / "skills"
-                ).resolve()
-            ),
+            str(extension_registry.project_root),
         )
         self.assertEqual(
             [call.args[0] for call in run_hook.call_args_list],
@@ -936,7 +922,7 @@ class ExtensionRegistryTests(unittest.TestCase):
             ["stock-analysis"],
         )
 
-    def test_api_answers_greeting_without_routing_or_inspecting_project(self):
+    def test_api_answers_greeting_with_model_without_routing(self):
         request = AgentChatRequest(question=" 你好。 ", thread_id="greeting-thread")
 
         with patch("src.api.chat.select_components") as select_components, patch(
@@ -944,13 +930,16 @@ class ExtensionRegistryTests(unittest.TestCase):
         ) as make_llm, patch("src.api.chat.ask_agent") as ask_agent, patch(
             "src.api.chat.hook_runner.run"
         ) as run_hook:
+            make_llm.return_value.invoke.return_value = AIMessage(
+                content="你好呀，我可以帮你分析股票。"
+            )
             response = agent_chat(request)
 
-        self.assertEqual(response["data"]["answer"], "你好！有什么我可以帮你？")
+        self.assertEqual(response["data"]["answer"], "你好呀，我可以帮你分析股票。")
         self.assertIsNone(response["data"]["agent_id"])
         self.assertEqual(response["data"]["thread_id"], "greeting-thread")
+        make_llm.assert_called_once()
         select_components.assert_not_called()
-        make_llm.assert_not_called()
         ask_agent.assert_not_called()
         run_hook.assert_not_called()
 
