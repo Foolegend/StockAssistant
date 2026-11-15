@@ -138,6 +138,53 @@ class ComponentRouterTests(unittest.TestCase):
             model.structured_model.calls[1][1].content.lower(),
         )
 
+    def test_empty_selection_means_no_component_matched(self):
+        model = FakeModel(
+            {
+                "agent_id": None,
+                "command_id": None,
+                "skill_ids": [],
+                "mcp_server_ids": [],
+            }
+        )
+
+        selection = select_components("帮我写一首关于秋天的诗", FakeRegistry(), model)
+
+        self.assertIsNone(selection.agent_id)
+        self.assertIsNone(selection.command_id)
+        self.assertEqual(selection.skill_ids, [])
+        self.assertEqual(selection.mcp_server_ids, [])
+
+    def test_allows_skill_without_agent(self):
+        model = FakeModel(
+            {
+                "agent_id": None,
+                "command_id": None,
+                "skill_ids": ["stock-analysis"],
+                "mcp_server_ids": [],
+            }
+        )
+
+        selection = select_components("用 stock-analysis 分析一下", FakeRegistry(), model)
+
+        self.assertIsNone(selection.agent_id)
+        self.assertEqual(selection.skill_ids, ["stock-analysis"])
+
+    def test_agent_selection_with_skill_does_not_fall_back_to_direct(self):
+        model = FakeModel(
+            {
+                "agent_id": "stock-analyst",
+                "command_id": None,
+                "skill_ids": ["stock-analysis"],
+                "mcp_server_ids": [],
+            }
+        )
+
+        selection = select_components("600519 怎么样", FakeRegistry(), model)
+
+        self.assertEqual(selection.agent_id, "stock-analyst")
+        self.assertEqual(selection.skill_ids, ["stock-analysis"])
+
     def test_rejects_unregistered_component_ids(self):
         invalid_selection = {
             "agent_id": "unknown-agent",
@@ -177,27 +224,19 @@ class ComponentRouterTests(unittest.TestCase):
             model.structured_model.calls[1][1].content,
         )
 
-    def test_retries_when_router_omits_required_agent_id(self):
+    def test_omitted_agent_id_is_accepted_as_direct_selection(self):
         model = FakeModel(
-            [
-                {"command_id": None},
-                {
-                    "agent_id": "stock-analyst",
-                    "command_id": None,
-                    "skill_ids": [],
-                    "mcp_server_ids": [],
-                },
-            ]
+            {
+                "command_id": None,
+                "skill_ids": [],
+                "mcp_server_ids": [],
+            }
         )
 
         selection = select_components("你好", FakeRegistry(), model)
 
-        self.assertEqual(selection.agent_id, "stock-analyst")
-        self.assertEqual(len(model.structured_model.calls), 2)
-        self.assertIn(
-            "complete all required fields",
-            model.structured_model.calls[1][1].content.lower(),
-        )
+        self.assertIsNone(selection.agent_id)
+        self.assertEqual(len(model.structured_model.calls), 1)
 
     def test_rejects_command_not_available_to_selected_agent(self):
         invalid_selection = {

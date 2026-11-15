@@ -13,21 +13,28 @@ logger = get_logger(__name__)
 class ComponentSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str
+    # None means "no registered agent fits". A command, skill, or MCP server may
+    # still be selected in that case; only a completely empty selection falls
+    # back to a direct model answer.
+    agent_id: str | None = None
     command_id: str | None = None
     skill_ids: list[str] = Field(default_factory=list)
     mcp_server_ids: list[str] = Field(default_factory=list)
 
 
 def _validate_selection(selection: ComponentSelection, registry: Any) -> ComponentSelection:
-    if selection.agent_id not in registry.agents:
+    if selection.agent_id is not None and selection.agent_id not in registry.agents:
         raise ValueError(f"Router selected unknown agent '{selection.agent_id}'")
     if selection.command_id is not None:
         command = registry.commands.get(selection.command_id)
         if command is None:
             raise ValueError(f"Router selected unknown command '{selection.command_id}'")
         allowed_agents = command.get("agent_ids", [])
-        if allowed_agents and selection.agent_id not in allowed_agents:
+        if (
+            selection.agent_id is not None
+            and allowed_agents
+            and selection.agent_id not in allowed_agents
+        ):
             raise ValueError(
                 f"Command '{selection.command_id}' is not available to agent '{selection.agent_id}'"
             )
@@ -56,9 +63,14 @@ def select_components(question: str, registry: Any, model: Any) -> ComponentSele
     }
     prompt = (
         "Route the user's request to registered assistant components. "
-        "agent_id is required and must be the exact ID of one registered agent; "
-        "never set agent_id to null or the string 'null'. Choose an applicable "
-        "command or null, and only the skills and MCP servers that are relevant. "
+        "agent_id must be the exact ID of one registered agent when one applies, "
+        "otherwise null; never use the string 'null'. A command, skill, or MCP "
+        "server may still be selected when agent_id is null, and the runtime will "
+        "handle it with a generic assistant. Leave the whole selection empty "
+        "(agent_id null and no command, skill, or MCP server) ONLY when nothing "
+        "registered is applicable; then the question is answered directly. "
+        "Choose an applicable command or null, and only the skills and MCP "
+        "servers that are relevant. "
         "Return component IDs from the 'id' fields, not display names from 'name'; "
         "command names may start with '/'. Choose a command only if it directly "
         "applies to the request and is allowed for the selected agent. Use null "
@@ -76,12 +88,12 @@ def select_components(question: str, registry: Any, model: Any) -> ComponentSele
         if retry_reason is not None:
             retry_prompt = (
                 f"Your previous response was invalid: {retry_reason}. "
-                "Complete all required fields. agent_id must be exactly one "
-                "registered agent ID and cannot be null or omitted. command_id "
+                "agent_id must be exactly one registered agent ID, or null when no "
+                "agent applies (never the string 'null'); a command, skill, or MCP "
+                "server may be selected with a null agent_id. command_id "
                 "must be null or an exact registered command ID from the 'id' "
                 "fields, never a display name from 'name'. Select null when no "
-                "command directly applies. For greetings or general questions, "
-                "choose the most relevant registered agent based on its description."
+                "command directly applies."
             )
             messages.append(SystemMessage(content=retry_prompt))
         messages.append(HumanMessage(content=question))

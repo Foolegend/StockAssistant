@@ -943,6 +943,56 @@ class ExtensionRegistryTests(unittest.TestCase):
         ask_agent.assert_not_called()
         run_hook.assert_not_called()
 
+    def test_api_answers_directly_when_no_component_matches(self):
+        request = AgentChatRequest(
+            question="帮我写一首关于秋天的诗",
+            thread_id="direct-thread",
+        )
+        selection = ComponentSelection()
+
+        with patch("src.api.chat.select_components", return_value=selection), patch(
+            "src.api.chat.resolve_component_dependencies"
+        ) as resolve, patch("src.api.chat.make_llm") as make_llm, patch(
+            "src.api.chat.ask_agent"
+        ) as ask_agent, patch("src.api.chat.hook_runner.run") as run_hook:
+            make_llm.return_value.invoke.return_value = AIMessage(content="秋天来了。")
+            response = agent_chat(request)
+
+        self.assertEqual(response["data"]["answer"], "秋天来了。")
+        self.assertIsNone(response["data"]["agent_id"])
+        self.assertIsNone(response["data"]["command_id"])
+        self.assertEqual(response["data"]["thread_id"], "direct-thread")
+        resolve.assert_not_called()
+        ask_agent.assert_not_called()
+        run_hook.assert_not_called()
+
+    def test_api_uses_generic_agent_when_only_skill_matches(self):
+        request = AgentChatRequest(
+            question="用 stock-analysis 看一下 TSLA",
+            thread_id="skill-only-thread",
+        )
+        selection = ComponentSelection(skill_ids=["stock-analysis"])
+        resolved = ResolvedComponents(
+            command_ids=[],
+            skill_ids=["stock-analysis"],
+            mcp_server_ids=[],
+            referenced_agent_ids=[],
+        )
+
+        with patch("src.api.chat.select_components", return_value=selection), patch(
+            "src.api.chat.resolve_component_dependencies", return_value=resolved
+        ), patch("src.api.chat.make_llm", return_value=object()), patch(
+            "src.api.chat.ask_agent", return_value="分析结果"
+        ) as ask_agent, patch("src.api.chat.hook_runner.run"):
+            response = agent_chat(request)
+
+        config = ask_agent.call_args.kwargs["config"]
+        self.assertEqual(response["data"]["answer"], "分析结果")
+        self.assertIsNone(response["data"]["agent_id"])
+        self.assertEqual(config.selected_skill_ids, ["stock-analysis"])
+        self.assertEqual(config.project_root, str(extension_registry.project_root))
+        self.assertTrue(config.system_prompt)
+
     def test_api_runs_error_hook_when_agent_fails(self):
         request = AgentChatRequest(question="hello, help me debug a failing endpoint")
         selection = ComponentSelection(

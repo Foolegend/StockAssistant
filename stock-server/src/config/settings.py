@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 BACK_ROOT = Path(__file__).resolve().parents[2]
-ENV_PATH = BACK_ROOT / "config" / ".env"
+ENV_PATH = BACK_ROOT / ".env"
 
 
 def get_settings():

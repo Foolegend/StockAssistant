@@ -121,7 +121,6 @@ celerybeat.pid
 
 # Environments
 .env
-stock-server/config/.env
 .venv
 env/
 venv/
@@ -168,7 +167,6 @@ large_tool_results/
 stock-server/tmp/
 /tmp/
 .vscode/
-stock-server/config/.env
 
 # ReCode local database
 .recode

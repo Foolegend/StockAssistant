@@ -61,7 +61,7 @@ Hook 从扩展目录下的 `hooks/hooks.json` 加载，使用原生事件名、m
 
 `PreToolUse` 和 `PostToolUse` 会在工具调用前后执行；其他事件会被读取，但当前尚未连接到运行时触发点。命令在后端工作目录中以 shell 运行并继承后端环境变量，JSON 事件上下文通过 stdin 传递。`PreToolUse` 非零退出会阻止工具运行；命令非零退出或超时会使请求失败。Hook 以服务端身份执行，只应配置可信命令；`stock-server/.stock/settings.json` 不会被导入或执行。
 
-Agent frontmatter 中的模型选择目前不映射到其他模型；运行模型由 `stock-server/config/.env` 中的 `CHAT_MODEL` 决定。修改扩展文件后需重启后端以重新扫描。
+Agent frontmatter 中的模型选择目前不映射到其他模型；运行模型由 `stock-server/.env` 中的 `CHAT_MODEL` 决定。修改扩展文件后需重启后端以重新扫描。
 
 MCP server 在扩展目录下的 `mcp-configs/mcp-servers.json` 中登记，配置使用 `mcpServers` 对象。例如：
 
@@ -119,10 +119,10 @@ npm install
 
 ## ⚙️ 配置说明
 
-首次配置时，将模板复制为 `stock-server/config/.env`，再按需修改：
+首次配置时，将模板复制为 `stock-server/.env`，再按需修改：
 
 ```powershell
-Copy-Item stock-server\config\.env.template stock-server\config\.env
+Copy-Item stock-server\.env.template stock-server\.env
 ```
 
 `.env` 不纳入 Git；提交时只提交 `.env.template`。配置项如下：

@@ -178,8 +178,6 @@ class ExtensionRegistry:
         self.agent_source_roots: dict[str, Path] = {}
         self._discover_project_definitions()
         self._validate_references()
-        if not self.agents:
-            raise ValueError(f"No agents found under {self.stock_extension_root}")
 
     def _discover_skills(self, skills_root: Path) -> None:
         if not skills_root.is_dir():
@@ -545,7 +543,7 @@ class ExtensionRegistry:
 
     def _subagents(
         self,
-        selected_agent_id: str,
+        selected_agent_id: str | None,
         referenced_agent_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         subagents = []
@@ -630,4 +628,64 @@ class ExtensionRegistry:
             "system_prompt": system_prompt,
             "project_root": project_root,
             "subagents": self._subagents(agent["id"], referenced_agent_ids),
+        }
+
+    def generic_runtime_config(
+        self,
+        command: dict[str, Any] | None,
+        default_system_prompt: str = "",
+        *,
+        skill_ids: list[str] | None = None,
+        mcp_server_ids: list[str] | None = None,
+        referenced_agent_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Runtime config for a selection that matched no registered agent.
+
+        A command, skill, or MCP server can still be useful without an agent
+        profile, so build a generic deep agent from the default prompt instead
+        of failing the request.
+        """
+        system_prompt = f"{default_system_prompt}\n\n{_PROJECT_RUNTIME_GUIDANCE}".strip()
+        instruction = command.get("instruction") if command else None
+        if instruction:
+            system_prompt = (
+                f"{system_prompt}\n\n## 当前命令：{command['name']}\n{instruction}"
+            ).strip()
+        if referenced_agent_ids:
+            referenced_agents = [
+                f"- {agent_id}: {self.agents[agent_id].get('description', '')}"
+                for agent_id in referenced_agent_ids
+            ]
+            system_prompt = (
+                f"{system_prompt}\n\n## 被引用的子 Agent\n"
+                "以下已注册 Agent 可通过 task 工具委派；仅在任务需要时调用：\n"
+                + "\n".join(referenced_agents)
+            ).strip()
+
+        selected_skill_ids = list(skill_ids or [])
+        selected_mcp_server_ids = list(mcp_server_ids or [])
+        skill_dirs = self._skill_source_paths(selected_skill_ids)
+        selected_skill_directories: dict[str, list[str]] = {}
+        for skill_id in selected_skill_ids:
+            skill = self.skills[skill_id]
+            directories = selected_skill_directories.setdefault(
+                skill["source_root"],
+                [],
+            )
+            if skill["directory_name"] not in directories:
+                directories.append(skill["directory_name"])
+
+        return {
+            "model_name": None,
+            "skill_dirs": skill_dirs,
+            "selected_skill_ids": selected_skill_ids,
+            "selected_skill_directories": selected_skill_directories,
+            "mcp_servers": [self.mcp_servers[server_id] for server_id in selected_mcp_server_ids],
+            "hooks": self.hooks,
+            "system_prompt": system_prompt,
+            "project_root": (
+                (command.get("project_root") if command else None)
+                or str(self.project_root)
+            ),
+            "subagents": self._subagents(None, referenced_agent_ids),
         }

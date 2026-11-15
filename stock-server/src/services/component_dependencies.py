@@ -229,7 +229,9 @@ def resolve_component_dependencies(
     mcp_server_ids = list(dict.fromkeys(selection.mcp_server_ids))
     referenced_agent_ids: list[str] = []
 
-    pending = [(("agent", selection.agent_id), 0)]
+    pending = []
+    if selection.agent_id is not None:
+        pending.append((("agent", selection.agent_id), 0))
     if selection.command_id:
         pending.append((("command", selection.command_id), 0))
     pending.extend((("skill", skill_id), 0) for skill_id in skill_ids)
@@ -301,13 +303,14 @@ def resolve_component_dependencies(
 
             if component_type == "command":
                 if component_id not in command_ids:
-                    try:
-                        registry.resolve(selection.agent_id, component_id)
-                    except (KeyError, ValueError) as error:
-                        raise ValueError(
-                            f"Nested command '{component_id}' is not available "
-                            f"for agent '{selection.agent_id}'"
-                        ) from error
+                    if selection.agent_id is not None:
+                        try:
+                            registry.resolve(selection.agent_id, component_id)
+                        except (KeyError, ValueError) as error:
+                            raise ValueError(
+                                f"Nested command '{component_id}' is not available "
+                                f"for agent '{selection.agent_id}'"
+                            ) from error
                     command_ids.append(component_id)
             elif component_type == "skill":
                 if component_id not in skill_ids:

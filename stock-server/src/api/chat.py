@@ -151,6 +151,21 @@ def _answer_directly(question: str) -> str:
     return answer or "抱歉，我暂时没有生成回复，请稍后再试。"
 
 
+def _direct_response(thread_id: str, answer: str) -> dict:
+    return {
+        "code": 0,
+        "message": "success",
+        "data": {
+            "answer": answer,
+            "agent_id": None,
+            "command_id": None,
+            "skills": [],
+            "model": None,
+            "thread_id": thread_id,
+        },
+    }
+
+
 @app.post("/agent/chat")
 def agent_chat(req: AgentChatRequest):
     logger.info(
@@ -158,65 +173,80 @@ def agent_chat(req: AgentChatRequest):
         req.thread_id,
         preview(req.question),
     )
+    selection = None
+    resolved = None
     if _is_greeting_only(req.question):
+        logger.info(
+            "chat greeting bypassed component routing thread_id=%s",
+            req.thread_id,
+        )
+    else:
+        try:
+            routing_model = make_llm(temperature=0)
+            selection = select_components(req.question, extension_registry, routing_model)
+            logger.info(
+                "routing selection agent=%s command=%s skills=%s mcp_servers=%s",
+                selection.agent_id,
+                selection.command_id,
+                selection.skill_ids,
+                selection.mcp_server_ids,
+            )
+            if (
+                selection.agent_id
+                or selection.command_id
+                or selection.skill_ids
+                or selection.mcp_server_ids
+            ):
+                resolved = resolve_component_dependencies(
+                    req.question,
+                    selection,
+                    extension_registry,
+                    routing_model,
+                )
+                logger.info(
+                    "routing resolved commands=%s skills=%s mcp_servers=%s "
+                    "referenced_agents=%s",
+                    resolved.command_ids,
+                    resolved.skill_ids,
+                    resolved.mcp_server_ids,
+                    resolved.referenced_agent_ids,
+                )
+        except ValueError as error:
+            logger.exception("component routing failed")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Component routing failed: {error}",
+            ) from error
+
+    if resolved is None:
+        # Greetings and requests that matched no component share one direct path.
         answer = _answer_directly(req.question)
         logger.info(
-            "chat greeting answered directly by model thread_id=%s answer=%s",
+            "chat answered directly by model thread_id=%s reason=%s answer=%s",
             req.thread_id,
+            "greeting" if selection is None else "no matching components",
             preview(answer),
         )
-        return {
-            "code": 0,
-            "message": "success",
-            "data": {
-                "answer": answer,
-                "agent_id": None,
-                "command_id": None,
-                "skills": [],
-                "model": None,
-                "thread_id": req.thread_id,
-            },
-        }
+        return _direct_response(req.thread_id, answer)
 
-    try:
-        routing_model = make_llm(temperature=0)
-        selection = select_components(req.question, extension_registry, routing_model)
-        logger.info(
-            "routing selection agent=%s command=%s skills=%s mcp_servers=%s",
-            selection.agent_id,
-            selection.command_id,
-            selection.skill_ids,
-            selection.mcp_server_ids,
-        )
-        resolved = resolve_component_dependencies(
-            req.question,
-            selection,
-            extension_registry,
-            routing_model,
-        )
-        logger.info(
-            "routing resolved commands=%s skills=%s mcp_servers=%s referenced_agents=%s",
-            resolved.command_ids,
-            resolved.skill_ids,
-            resolved.mcp_server_ids,
-            resolved.referenced_agent_ids,
-        )
-    except ValueError as error:
-        logger.exception("component routing failed")
-        raise HTTPException(status_code=502, detail=f"Component routing failed: {error}") from error
-
-    try:
-        agent, command = extension_registry.resolve(selection.agent_id, selection.command_id)
-    except (KeyError, ValueError) as error:
-        logger.exception(
-            "component resolve failed agent=%s command=%s",
-            selection.agent_id,
-            selection.command_id,
-        )
-        raise HTTPException(status_code=502, detail=f"Component routing failed: {error}") from error
-
-    config = AgentConfig(
-        **extension_registry.agent_runtime_config(
+    if selection.agent_id is not None:
+        try:
+            agent, command = extension_registry.resolve(
+                selection.agent_id,
+                selection.command_id,
+            )
+        except (KeyError, ValueError) as error:
+            logger.exception(
+                "component resolve failed agent=%s command=%s",
+                selection.agent_id,
+                selection.command_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Component routing failed: {error}",
+            ) from error
+        agent_id = agent["id"]
+        runtime_config = extension_registry.agent_runtime_config(
             agent,
             command,
             default_system_prompt(),
@@ -224,10 +254,25 @@ def agent_chat(req: AgentChatRequest):
             mcp_server_ids=resolved.mcp_server_ids,
             referenced_agent_ids=resolved.referenced_agent_ids,
         )
-    )
+    else:
+        agent_id = None
+        command = (
+            extension_registry.commands.get(selection.command_id)
+            if selection.command_id
+            else None
+        )
+        runtime_config = extension_registry.generic_runtime_config(
+            command,
+            default_system_prompt(),
+            skill_ids=resolved.skill_ids,
+            mcp_server_ids=resolved.mcp_server_ids,
+            referenced_agent_ids=resolved.referenced_agent_ids,
+        )
+
+    config = AgentConfig(**runtime_config)
     logger.info(
         "resolved agent=%s command=%s model=%s skills=%s mcp_servers=%s",
-        agent["id"],
+        agent_id,
         command["id"] if command else None,
         config.model_name,
         config.selected_skill_ids,
@@ -246,7 +291,7 @@ def agent_chat(req: AgentChatRequest):
     )
     hook_context = {
         "question": req.question,
-        "agent_id": agent["id"],
+        "agent_id": agent_id,
         "command_id": command["id"] if command else None,
         "thread_id": req.thread_id,
     }
@@ -254,21 +299,21 @@ def agent_chat(req: AgentChatRequest):
         hook_runner.run(
             "before_agent",
             hook_context,
-            agent_id=agent["id"],
+            agent_id=agent_id,
             command_id=command["id"] if command else None,
         )
         answer = ask_agent(question, config=config, thread_id=req.thread_id)
         logger.info(
             "chat answer thread_id=%s agent=%s chars=%d answer=%s",
             req.thread_id,
-            agent["id"],
+            agent_id,
             len(answer),
             preview(answer),
         )
         hook_runner.run(
             "after_agent",
             {**hook_context, "answer": answer},
-            agent_id=agent["id"],
+            agent_id=agent_id,
             command_id=command["id"] if command else None,
         )
     except Exception as error:
@@ -276,21 +321,21 @@ def agent_chat(req: AgentChatRequest):
             logger.warning(
                 "chat rate limited thread_id=%s agent=%s command=%s",
                 req.thread_id,
-                agent["id"],
+                agent_id,
                 command["id"] if command else None,
             )
         else:
             logger.exception(
                 "chat failed thread_id=%s agent=%s command=%s",
                 req.thread_id,
-                agent["id"],
+                agent_id,
                 command["id"] if command else None,
             )
         try:
             hook_runner.run(
                 "on_error",
                 {**hook_context, "error": str(error)},
-                agent_id=agent["id"],
+                agent_id=agent_id,
                 command_id=command["id"] if command else None,
             )
         except HookExecutionError as hook_error:
@@ -308,7 +353,7 @@ def agent_chat(req: AgentChatRequest):
         "message": "success",
         "data": {
             "answer": answer,
-            "agent_id": agent["id"],
+            "agent_id": agent_id,
             "command_id": command["id"] if command else None,
             "skills": [
                 {"id": skill_id, "name": extension_registry.skills[skill_id]["name"]}
