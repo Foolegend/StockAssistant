@@ -215,6 +215,12 @@ class UnifiedAgentTests(unittest.TestCase):
             self.assertIsNone(read_result.error)
             self.assertIn("print('ok')", read_result.file_data["content"])
 
+            tmp_result = backend.write("/tmp/alias.py", "print('tmp')")
+
+            self.assertIsNone(tmp_result.error)
+            self.assertTrue((Path(project_root) / ".tmp" / "alias.py").exists())
+            self.assertFalse((Path(project_root) / "tmp").exists())
+
     def test_relative_and_virtual_paths_are_unchanged(self):
         with tempfile.TemporaryDirectory() as project_root:
             self.assertEqual(
@@ -223,6 +229,10 @@ class UnifiedAgentTests(unittest.TestCase):
             )
             self.assertEqual(
                 _to_virtual_tool_path("/.tmp/probe.py", project_root),
+                "/.tmp/probe.py",
+            )
+            self.assertEqual(
+                _to_virtual_tool_path("/tmp/probe.py", project_root),
                 "/.tmp/probe.py",
             )
 

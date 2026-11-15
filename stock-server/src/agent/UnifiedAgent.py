@@ -5,6 +5,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from threading import RLock
 from typing import List, Optional, Sequence
 
@@ -80,6 +81,10 @@ def _to_virtual_tool_path(path: str, root: str) -> str:
     """
     if not isinstance(path, str) or not path:
         return path
+    # Models habitually use the Unix temp dir; keep that intent but store the
+    # files under the project's ignored ``.tmp`` directory.
+    if path == "/tmp" or path.startswith("/tmp/"):
+        path = "/.tmp" + path[len("/tmp"):]
     candidate = path
     drive_match = _POSIX_DRIVE_PATH.match(candidate)
     if drive_match:
@@ -99,7 +104,28 @@ class _ProjectRootShellBackend(LocalShellBackend):
     """LocalShellBackend that tolerates host-absolute paths from the model."""
 
     def _resolve_path(self, key: str):
-        return super()._resolve_path(_to_virtual_tool_path(key, str(self.cwd)))
+        normalized = _to_virtual_tool_path(key, str(self.cwd))
+        try:
+            return super()._resolve_path(normalized)
+        except ValueError as error:
+            # On Windows, Path.resolve() can keep the ``\\?\`` extended prefix
+            # when the directory tree changes while it resolves (for example
+            # two parallel write_file calls creating the same directory).  The
+            # prefix makes an in-root path fail the textual containment check,
+            # so retry once with the prefix removed before giving up.
+            vpath = normalized if normalized.startswith("/") else "/" + normalized
+            if ".." in vpath or vpath.startswith("~"):
+                raise
+            full = (self.cwd / vpath.lstrip("/")).resolve()
+            text = str(full)
+            if text.startswith("\\\\?\\"):
+                text = text[4:]
+            full = Path(text)
+            try:
+                full.relative_to(self.cwd)
+            except ValueError:
+                raise error from None
+            return full
 
 
 @dataclass
@@ -203,6 +229,9 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
 
     skill_dirs = ensure_skill_dirs(cfg.skill_dirs)
     project_root = _normalize_path(cfg.project_root) or PROJECT_ROOT
+    # Create the shared scratch directory up front so concurrent tool calls
+    # never race to create it while the backend resolves paths inside it.
+    os.makedirs(os.path.join(project_root, ".tmp"), exist_ok=True)
     # SkillsMiddleware 通过 backend 读文件；virtual_mode 下路径相对 project_root，
     # 必须把宿主机绝对路径转成后端虚拟路径，否则技能目录会报 path_not_found。
     skill_dirs = [_to_backend_path(path, project_root) for path in skill_dirs]
