@@ -7,7 +7,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agent.UnifiedAgent import AgentConfig, PLUGIN_ROOT, build_agent, make_llm
+from src.agent.UnifiedAgent import (
+    AgentConfig,
+    PLUGIN_ROOT,
+    _ProjectRootShellBackend,
+    _to_virtual_tool_path,
+    build_agent,
+    make_llm,
+)
 from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.services.hook_runner import HookToolMiddleware
 
@@ -162,6 +169,62 @@ class UnifiedAgentTests(unittest.TestCase):
             create_deep_agent.call_args.kwargs["subagents"][0]["skills"],
             ["/stock-server/.stock/skills"],
         )
+
+    @unittest.skipUnless(os.name == "nt", "Windows host path convention")
+    def test_windows_host_path_inside_root_maps_to_virtual_path(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            host_path = os.path.join(project_root, ".tmp", "probe.py")
+            self.assertEqual(
+                _to_virtual_tool_path(host_path, project_root),
+                "/.tmp/probe.py",
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows host path convention")
+    def test_git_bash_style_path_inside_root_maps_to_virtual_path(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            drive, tail = os.path.splitdrive(project_root)
+            posix_path = "/" + drive[0].lower() + tail.replace("\\", "/") + "/.tmp/probe.py"
+            self.assertEqual(
+                _to_virtual_tool_path(posix_path, project_root),
+                "/.tmp/probe.py",
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows host path convention")
+    def test_host_path_outside_root_is_left_for_backend_to_reject(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            outside = os.path.join(tempfile.gettempdir(), "outside.py")
+            self.assertEqual(_to_virtual_tool_path(outside, project_root), outside)
+
+    @unittest.skipUnless(os.name == "nt", "Windows host path convention")
+    def test_backend_writes_host_absolute_path_into_project_root(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            backend = _ProjectRootShellBackend(
+                root_dir=project_root,
+                env={},
+                virtual_mode=True,
+            )
+            target = os.path.join(project_root, ".tmp", "probe.py")
+
+            result = backend.write(target, "print('ok')")
+
+            self.assertIsNone(result.error)
+            self.assertTrue((Path(project_root) / ".tmp" / "probe.py").exists())
+            self.assertFalse((Path(project_root) / "d").exists())
+
+            read_result = backend.read(target)
+            self.assertIsNone(read_result.error)
+            self.assertIn("print('ok')", read_result.file_data["content"])
+
+    def test_relative_and_virtual_paths_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            self.assertEqual(
+                _to_virtual_tool_path(".tmp/probe.py", project_root),
+                ".tmp/probe.py",
+            )
+            self.assertEqual(
+                _to_virtual_tool_path("/.tmp/probe.py", project_root),
+                "/.tmp/probe.py",
+            )
 
     def test_make_llm_configures_retries_and_timeout(self):
         with patch.dict(

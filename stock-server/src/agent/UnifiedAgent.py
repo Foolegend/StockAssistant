@@ -1,10 +1,9 @@
 import hashlib
 import json
 import os
+import re
 import sys
 import time
-
-from openai import RateLimitError
 from dataclasses import dataclass
 from threading import RLock
 from typing import List, Optional, Sequence
@@ -13,6 +12,7 @@ from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from openai import RateLimitError
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
@@ -62,6 +62,44 @@ def _to_backend_path(path: str, root: str) -> str:
     if relative == os.pardir or relative.startswith(os.pardir + os.sep):
         return path
     return "/" + relative.replace(os.sep, "/")
+
+
+_WINDOWS_ABS_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+_POSIX_DRIVE_PATH = re.compile(r"^/([A-Za-z])/")
+
+
+def _to_virtual_tool_path(path: str, root: str) -> str:
+    """Map host-absolute paths back to the backend's virtual path form.
+
+    File tools run with ``virtual_mode=True`` where ``/`` means ``root``.  A
+    model that copies a host path (``D:\\repo\\.tmp\\x`` or the Git-Bash form
+    ``/d/repo/.tmp/x``) would otherwise create ``<root>/d/repo/...`` while the
+    shell resolves the same command line against the real host path.  Translate
+    paths that fall inside ``root``; leave anything else untouched so the
+    backend still rejects it.
+    """
+    if not isinstance(path, str) or not path:
+        return path
+    candidate = path
+    drive_match = _POSIX_DRIVE_PATH.match(candidate)
+    if drive_match:
+        candidate = drive_match.group(1) + ":\\" + candidate[3:].replace("/", "\\")
+    if not _WINDOWS_ABS_PATH.match(candidate):
+        return path
+    try:
+        relative = os.path.relpath(candidate, root)
+    except ValueError:  # different drive on Windows
+        return path
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return path
+    return "/" + relative.replace(os.sep, "/")
+
+
+class _ProjectRootShellBackend(LocalShellBackend):
+    """LocalShellBackend that tolerates host-absolute paths from the model."""
+
+    def _resolve_path(self, key: str):
+        return super()._resolve_path(_to_virtual_tool_path(key, str(self.cwd)))
 
 
 @dataclass
@@ -183,7 +221,7 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
         project_root,
     )
 
-    backend = LocalShellBackend(
+    backend = _ProjectRootShellBackend(
         root_dir=project_root,
         env={
             **os.environ.copy(),
