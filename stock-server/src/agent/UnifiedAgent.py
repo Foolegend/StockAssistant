@@ -12,7 +12,7 @@ from typing import Callable, List, Optional, Sequence
 
 from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from langchain_openai import ChatOpenAI
 from openai import RateLimitError
 from langgraph.checkpoint.memory import MemorySaver
@@ -36,6 +36,27 @@ _AGENT_CACHE = {}
 _AGENT_CACHE_LOCK = RLock()
 
 load_dotenv(ENV_PATH)
+
+
+def _ensure_env_loaded() -> None:
+    """Fill missing credentials from ``.env`` right before the model is built.
+
+    ``load_dotenv`` runs once at import time and, by default, does not override
+    variables that already exist in ``os.environ`` -- including an exported
+    *empty* ``OPENAI_API_KEY``, which the OpenAI SDK treats as missing
+    credentials.  Re-reading the file here means a transient startup state (or
+    an empty exported variable) no longer breaks every model call until the
+    process is restarted.
+    """
+    if (os.getenv("OPENAI_API_KEY") or "").strip():
+        return
+    for key, value in dotenv_values(ENV_PATH).items():
+        if value and not (os.getenv(key) or "").strip():
+            os.environ[key] = value
+    if not (os.getenv("OPENAI_API_KEY") or "").strip():
+        logger.error(
+            "OPENAI_API_KEY 未配置，请在 %s 中设置 OPENAI_API_KEY 后重启服务", ENV_PATH
+        )
 
 
 def _normalize_path(path: Optional[str]) -> Optional[str]:
@@ -178,6 +199,7 @@ def default_system_prompt() -> str:
 
 
 def make_llm(model_name: Optional[str] = None, temperature: float = 0.2):
+    _ensure_env_loaded()
     chosen_model = (model_name or os.getenv("CHAT_MODEL") or "gpt-oss:120b-cloud").strip()
     return ChatOpenAI(
         model=chosen_model,

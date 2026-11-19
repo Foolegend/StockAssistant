@@ -53,7 +53,7 @@ metadata:
 |------|------|------|--------|
 | 6位数字 (6/0/3开头) | A股 | 600519, 000001, 300750 | akshare |
 | HK + 5位数字 | 港股 | HK00700, HK09988 | akshare |
-| 1-5位大写字母 | 美股 | AAPL, TSLA, PLTR | yfinance |
+| 1-5位大写字母 | 美股 | AAPL, TSLA, PLTR | yfinance（腾讯行情兜底） |
 
 ### 处理逻辑
 - 多只股票用逗号、空格或换行分隔
@@ -73,7 +73,7 @@ metadata:
 **行情数据降级链**：
 - A股: Tushare Pro → efinance → akshare → yfinance
 - 港股: efinance → akshare → yfinance
-- 美股: yfinance（主力）
+- 美股: yfinance → tencent（Yahoo 限流 429 时自动回退，无需 Key）
 
 **新闻降级链**：Tavily → SerpAPI → Claude WebSearch（兜底）
 
@@ -185,7 +185,7 @@ file_read("stock-server/.stock/skills/stock-analysis/references/output-format-te
 
 ## 注意事项
 
-- 所有价格数据来自真实市场（akshare/yfinance），不是编造的
+- 所有价格数据来自真实市场（akshare/yfinance/tencent），不是编造的
 - 技术指标由 Python 精确计算，不要手动估算
 - 分析判断要直接果断，不要模棱两可
 - 中文输出，价格用原始货币单位（A股=人民币，美股=美元，港股=港币）

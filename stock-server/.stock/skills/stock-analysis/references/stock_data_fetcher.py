@@ -7,7 +7,7 @@ No AI/LLM calls -- pure data + math.
 Data source priority (graceful degradation):
   A-share: Tushare Pro (if TUSHARE_TOKEN set) > efinance > akshare > yfinance
   HK:      efinance > akshare > yfinance
-  US:      yfinance (primary)
+  US:      yfinance > tencent (fallback when Yahoo rate-limits)
 
 News search priority (via --news flag):
   Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in Claude)
@@ -188,17 +188,37 @@ def _fetch_efinance_hk(code: str, days: int):
 
 # --- akshare (Priority 2, free) ---
 
+def _akshare_hist(symbol: str, start_date: str, end_date: str, market: str):
+    """Call akshare daily history across versions.
+
+    akshare >= 1.20.46 renamed ``stock_zh_a_hist`` / ``stock_hk_hist`` to
+    ``stock_zh_a_hist_em`` / ``stock_hk_hist_em``; try the new name first so
+    both old and new akshare versions keep working.
+    """
+    import akshare as ak
+    candidates = (
+        ("stock_zh_a_hist_em", "stock_zh_a_hist")
+        if market == "cn_a"
+        else ("stock_hk_hist_em", "stock_hk_hist")
+    )
+    for name in candidates:
+        func = getattr(ak, name, None)
+        if func is None:
+            continue
+        try:
+            return func(symbol=symbol, period="daily",
+                        start_date=start_date, end_date=end_date, adjust="qfq")
+        except Exception:
+            return func(symbol=symbol, period="daily",
+                        start_date=start_date, end_date=end_date, adjust="")
+    raise AttributeError(f"akshare has no daily history API for market {market!r}")
+
+
 def _fetch_akshare_a(code: str, days: int):
     """Fetch A-share via akshare."""
-    import akshare as ak
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-    try:
-        df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                start_date=start_date, end_date=end_date, adjust="qfq")
-    except Exception:
-        df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                start_date=start_date, end_date=end_date, adjust="")
+    df = _akshare_hist(code, start_date, end_date, "cn_a")
     if df is None or df.empty:
         raise ValueError(f"akshare returned no data for {code}")
     col_map = {
@@ -213,15 +233,9 @@ def _fetch_akshare_a(code: str, days: int):
 
 def _fetch_akshare_hk(code: str, days: int):
     """Fetch HK stock via akshare."""
-    import akshare as ak
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-    try:
-        df = ak.stock_hk_hist(symbol=code, period="daily",
-                              start_date=start_date, end_date=end_date, adjust="qfq")
-    except Exception:
-        df = ak.stock_hk_hist(symbol=code, period="daily",
-                              start_date=start_date, end_date=end_date, adjust="")
+    df = _akshare_hist(code, start_date, end_date, "cn_hk")
     if df is None or df.empty:
         raise ValueError(f"akshare returned no data for HK{code}")
     col_map = {
@@ -365,6 +379,115 @@ def _fetch_realtime_us(code: str) -> dict:
         return {}
 
 
+# --- Tencent (US fallback when Yahoo rate-limits) ---
+
+_QUOTE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Referer": "https://gu.qq.com/",
+}
+
+
+def _quote_get(url: str, timeout: int = 25):
+    """GET a quote endpoint with a browser-like UA (Tencent rejects default UAs)."""
+    import requests
+
+    return requests.get(url, headers=_QUOTE_HEADERS, timeout=timeout)
+
+
+def _fetch_tencent_us_quote(code: str) -> dict:
+    """Fetch a US realtime snapshot from Tencent. Returns {} on failure."""
+    try:
+        resp = _quote_get(f"https://qt.gtimg.cn/q=us{code.upper()}")
+        resp.encoding = "gbk"
+        body = resp.text
+        if "=" not in body:
+            return {}
+        fields = body.split("=", 1)[1].strip().strip('";').split("~")
+
+        def num(index):
+            try:
+                value = fields[index].strip()
+                return float(value) if value not in ("", "-") else None
+            except (IndexError, ValueError):
+                return None
+
+        def text(index):
+            try:
+                return fields[index].strip()
+            except IndexError:
+                return ""
+
+        circ_mv = num(44)
+        total_mv = num(45)
+        return {
+            "name": text(1),
+            "full_code": text(2),
+            "price": num(3),
+            "pre_close": num(4),
+            "open": num(5),
+            "time": text(30),
+            "change_amount": num(31),
+            "change_pct": num(32),
+            "high": num(33),
+            "low": num(34),
+            "currency": text(35),
+            "volume": num(36),
+            "amount": num(37),
+            "pe_ratio": num(39),
+            "amplitude": num(43),
+            "circ_mv": circ_mv * 1e8 if circ_mv else None,
+            "total_mv": total_mv * 1e8 if total_mv else None,
+            "en_name": text(46),
+            "week_52_high": num(48),
+            "week_52_low": num(49),
+            "dividend_yield": num(52),
+        }
+    except Exception as e:
+        _log(f"[{code}] Tencent quote failed: {e}")
+        return {}
+
+
+def _fetch_tencent_us(code: str, days: int, quote=None):
+    """Fetch US daily bars (forward-adjusted) from Tencent. Returns (ohlcv, source)."""
+    quote = quote or _fetch_tencent_us_quote(code)
+    full_code = quote.get("full_code")
+    if not full_code:
+        raise ValueError("no Tencent quote available (missing full_code)")
+    count = max(days + 60, 180)
+    url = (
+        "https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get"
+        f"?param=us{full_code},day,,,{count},qfq"
+    )
+    data = _quote_get(url, timeout=30).json()["data"][f"us{full_code}"]
+    bars = data.get("qfqday") or data.get("day") or []
+    if not bars:
+        raise ValueError(f"Tencent returned no daily bars for {full_code}")
+    ohlcv = []
+    for bar in bars:
+        # [date, open, close, high, low, volume]
+        ohlcv.append({
+            "date": str(bar[0])[:10],
+            "open": _safe_float(bar[1]),
+            "high": _safe_float(bar[3]),
+            "low": _safe_float(bar[4]),
+            "close": _safe_float(bar[2]),
+            "volume": _safe_float(bar[5]) if len(bar) > 5 else None,
+            "amount": None,
+            "pct_chg": None,
+        })
+    if len(ohlcv) > days:
+        ohlcv = ohlcv[-days:]
+    for i in range(1, len(ohlcv)):
+        prev = ohlcv[i - 1]["close"]
+        if prev and prev > 0:
+            ohlcv[i]["pct_chg"] = round((ohlcv[i]["close"] - prev) / prev * 100, 2)
+    _log(f"[{code}] Using tencent (US fallback)")
+    return ohlcv, "tencent"
+
+
 # --- Priority router ---
 
 def fetch_cn_a(code: str, days: int) -> dict:
@@ -442,13 +565,36 @@ def fetch_hk(code: str, days: int) -> dict:
 
 
 def fetch_us(code: str, days: int) -> dict:
-    """Fetch US stock via yfinance (primary source for US)."""
-    ohlcv, source = _fetch_yfinance(code, "us", days)
-    realtime = _fetch_realtime_us(code)
+    """Fetch US stock: yfinance first, Tencent when Yahoo rate-limits."""
+    errors = []
+    ohlcv = None
+    source = "unknown"
+
+    try:
+        ohlcv, source = _fetch_yfinance(code, "us", days)
+    except Exception as e:
+        errors.append(f"yfinance: {e}")
+        _log(f"[{code}] yfinance failed ({e}); falling back to tencent")
+
+    realtime = _fetch_realtime_us(code) if ohlcv else {}
+
+    if not ohlcv:
+        quote = _fetch_tencent_us_quote(code)
+        try:
+            ohlcv, source = _fetch_tencent_us(code, days, quote)
+        except Exception as e:
+            errors.append(f"tencent: {e}")
+            raise ValueError(
+                f"All US data sources failed for {code}: {'; '.join(errors)}"
+            )
+        realtime = realtime or quote
+    elif not realtime:
+        realtime = _fetch_tencent_us_quote(code)
+
     if not realtime and ohlcv:
         last = ohlcv[-1]
         realtime = {"name": code, "price": last["close"], "change_pct": last.get("pct_chg")}
-    name = realtime.get("name", code)
+    name = realtime.get("en_name") or realtime.get("name", code)
     return {"ohlcv": ohlcv, "realtime": realtime, "name": name, "source": source}
 
 
@@ -955,6 +1101,7 @@ def main():
     sources_status = {}
     for lib in ["tushare", "efinance", "akshare", "yfinance"]:
         sources_status[lib] = "available" if _check_source(lib) else "not installed"
+    sources_status["tencent"] = "available"  # HTTP API, no local package required
     sources_status["tushare_token"] = "configured" if os.environ.get("TUSHARE_TOKEN") else "not set"
     sources_status["tavily_api"] = "configured" if os.environ.get("TAVILY_API_KEY") else "not set"
     sources_status["serpapi"] = "configured" if os.environ.get("SERPAPI_KEY") else "not set"
