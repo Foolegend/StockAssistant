@@ -1,6 +1,8 @@
 import os
 import sys
 import unittest
+from threading import Event
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -9,7 +11,7 @@ from openai import RateLimitError
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.api.chat import app
+from src.api.chat import _active_runs, _active_runs_lock, app, cancel_agent_run
 from src.services.component_dependencies import ResolvedComponents
 from src.services.component_router import ComponentSelection
 
@@ -46,6 +48,47 @@ class ChatApiRateLimitTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["code"], 429)
         self.assertIn("限流", payload["message"])
+
+
+class ChatApiStreamingTests(unittest.TestCase):
+    def test_stream_emits_status_and_linked_sources(self):
+        class FakeModel:
+            def stream(self, _messages):
+                return iter(
+                    [
+                        SimpleNamespace(
+                            content="先核对公告：[公司公告](https://example.com/filing)"
+                        )
+                    ]
+                )
+
+        client = TestClient(app)
+        with patch("src.api.chat.make_llm", return_value=FakeModel()):
+            response = client.post(
+                "/agent/chat/stream",
+                json={"question": "你好", "run_id": "stream-test"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "text/event-stream; charset=utf-8")
+        self.assertIn('event: status\ndata: {"stage": "routing"', response.text)
+        self.assertIn("event: complete", response.text)
+        self.assertIn('"title": "公司公告"', response.text)
+        self.assertIn('"url": "https://example.com/filing"', response.text)
+
+    def test_cancel_endpoint_signals_the_active_run(self):
+        run_id = "cancel-test"
+        stop_event = Event()
+        with _active_runs_lock:
+            _active_runs[run_id] = stop_event
+        try:
+            response = cancel_agent_run(run_id)
+        finally:
+            with _active_runs_lock:
+                _active_runs.pop(run_id, None)
+
+        self.assertTrue(stop_event.is_set())
+        self.assertEqual(response["data"]["run_id"], run_id)
 
 
 if __name__ == "__main__":

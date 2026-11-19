@@ -16,9 +16,11 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 - **MCP 集成**：通过 MCP 适配器扩展标准工具集。
 
 ### 2. 前端 (stock-ui)
-基于 **Angular** 构建的现代化聊天界面。
-- **实时交互**：通过 REST API 与后端 Agent 通信。
-- **响应式设计**：适配不同设备，提供专业且简洁的 AI 聊天体验。
+基于 **Angular** 构建的对话优先研究工作台。
+- **分析会话**：最近 30 条对话保存在当前浏览器本地。
+- **过程可见**：展示后端实际报告的分析状态与工具调用。
+- **依据可追溯**：列出回答中明确提供的网页链接；未附链接时明确提示来源未经核实。
+- **响应式设计**：在桌面端并列显示对话与依据面板，小屏幕下纵向排列。
 
 ---
 
@@ -31,7 +33,7 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 - `stock-server/.stock/hooks/hooks.json`：读取原生事件、matcher 和 command 定义；`stock-server/.stock/mcp-configs/mcp-servers.json`：读取 `mcpServers` 配置并注册 MCP server。
 - Hook 脚本和共享工具位于 `stock-server/.stock/hooks/scripts/`，由 Hook 配置和 `setup-pm` Command 调用。
 
-`GET /agent/catalog` 提供已注册组件信息；聊天界面不要求用户选择或提交组件 ID。服务端扫描时只读取 Agent、Command、Skill 的 YAML frontmatter 和文件路径，用名称、描述等摘要进行初选；只在依赖解析或执行时读取已选组件的正文，不把未选组件的正文送入模型上下文。服务端还会递归检查已选 Agent、Command 和 Skill 的正文，解析其中显式或语义上引用的注册组件：嵌套 Command 合并为本轮指令，嵌套 Skill 加载到主 Agent，嵌套 Agent 提供为可委派子 Agent（由主 Agent 决定是否委派）。`POST /agent/chat` 只接收问题和会话 ID，并校验组件选择均来自注册表。客户端不接受或提交本地 Skill 路径、MCP 启动命令或组件 ID。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
+`GET /agent/catalog` 提供已注册组件信息；聊天界面不要求用户选择或提交组件 ID。服务端扫描时只读取 Agent、Command、Skill 的 YAML frontmatter 和文件路径，用名称、描述等摘要进行初选；只在依赖解析或执行时读取已选组件的正文，不把未选组件的正文送入模型上下文。服务端还会递归检查已选 Agent、Command 和 Skill 的正文，解析其中显式或语义上引用的注册组件：嵌套 Command 合并为本轮指令，嵌套 Skill 加载到主 Agent，嵌套 Agent 提供为可委派子 Agent（由主 Agent 决定是否委派）。`POST /agent/chat` 保留一次性响应接口；前端使用 `POST /agent/chat/stream` 接收分析状态、实际工具调用事件和最终回答。请求包含问题、会话 ID 和本次运行 ID；`POST /agent/chat/runs/{run_id}/cancel` 可请求停止任务，停止在当前模型或工具步骤结束后生效。回答中的 Markdown 网页链接会作为来源返回，但不会由服务端独立核验。客户端不接受或提交本地 Skill 路径、MCP 启动命令或组件 ID。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
 
 Command 无需额外 JSON 配置；服务端根据问题选择适用命令，也可以不选择 Command 进行普通对话。
 
@@ -82,7 +84,7 @@ MCP server 在扩展目录下的 `mcp-configs/mcp-servers.json` 中登记，配�
 
 也支持通过 `type: "http"` 和 `url` 配置 HTTP MCP server。聊天时由服务端根据问题从已注册 server 中选择；MCP 配置可启动服务端进程或发起网络连接，只应注册经过审查的 server。
 
-修改 JSON 扩展配置后重启后端。当前会话检查点保存在进程内存中，后端重启会清空；跨重启的数据库持久化可作为后续扩展。
+修改 JSON 扩展配置后重启后端。Agent 会话检查点保存在进程内存中，后端重启会清空；前端历史仅保存在当前浏览器，不会同步到其他设备。
 
 ---
 

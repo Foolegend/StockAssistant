@@ -1,37 +1,261 @@
-<div class="box">
-  <h2>StockAssistant 智能体</h2>
+<div class="workspace">
+  <aside class="sidebar" aria-label="会话导航">
+    <a class="brand" href="/" aria-label="StockAssistant 首页">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M5 22.5 12 15l5 4 10-11" />
+          <path d="M20 8h7v7" />
+        </svg>
+      </span>
+      <span class="brand-name">Stock<span>Assistant</span></span>
+    </a>
 
-  <div class="chat-container">
-    <div class="input-group">
-      <input
-        [(ngModel)]="userQuestion"
-        placeholder="请输入问题..."
-        (keyup.enter)="sendChat()"
-      />
-      <button (click)="sendChat()" [disabled]="isLoading || !userQuestion.trim()">发送</button>
-    </div>
+    <button class="new-chat-button" type="button" (click)="newChat()" [disabled]="isLoading">
+      <span aria-hidden="true">＋</span>
+      新建分析
+    </button>
 
-    <div *ngIf="isLoading" class="status">
-      <span class="spinner"></span> 正在思考中...
-    </div>
-
-    <div *ngIf="apiError" class="error">
-      {{ apiError }}
-    </div>
-
-    <div *ngIf="chatAnswer" class="answer-box">
-      <div class="answer-header">
-        <h3>AI 回复：</h3>
+    <div class="sidebar-section">
+      <p class="sidebar-label">最近研究</p>
+      <nav class="conversation-list" aria-label="最近研究">
         <button
+          *ngFor="let conversation of conversations"
+          class="conversation-link"
+          [class.selected]="conversation.threadId === currentConversation.threadId"
           type="button"
-          class="copy-button"
-          (click)="copyAnswer()"
-          [disabled]="copyState !== 'idle'"
+          [disabled]="isLoading"
+          (click)="openConversation(conversation)"
+          [title]="conversation.title"
         >
-          {{ copyLabel }}
+          <span class="conversation-glyph" aria-hidden="true">◌</span>
+          <span>{{ conversation.title }}</span>
         </button>
-      </div>
-      <div class="answer-content markdown-body" [innerHTML]="chatAnswer | markdown"></div>
+        <p *ngIf="!conversations.length" class="empty-history">
+          你的分析记录会保存在这里
+        </p>
+      </nav>
     </div>
-  </div>
+
+    <div class="sidebar-bottom">
+      <div class="privacy-note">
+        <span class="privacy-dot" aria-hidden="true"></span>
+        <span>仅用于研究参考</span>
+      </div>
+      <p>分析结果可能不完整，请核对原始信息。</p>
+    </div>
+  </aside>
+
+  <main class="main-panel">
+    <header class="topbar">
+      <div class="workspace-title">
+        <span class="mobile-brand-mark" aria-hidden="true">S</span>
+        <div>
+          <p>投资研究工作台</p>
+          <span>与智能体一起梳理问题与证据</span>
+        </div>
+      </div>
+      <div class="connection-state">
+        <span class="connection-dot" aria-hidden="true"></span>
+        智能分析
+      </div>
+    </header>
+
+    <div class="content-layout">
+      <section class="conversation-panel" aria-label="智能体对话">
+        <div class="message-list" aria-live="polite">
+          <section *ngIf="!currentConversation.messages.length" class="welcome">
+            <div class="welcome-emblem" aria-hidden="true">
+              <svg viewBox="0 0 52 52" fill="none">
+                <path d="M9 35.5 20 24l8 6.5L43 14" />
+                <path d="M33 14h10v10" />
+                <path d="M10 42h32" class="emblem-baseline" />
+              </svg>
+            </div>
+            <p class="welcome-kicker">StockAssistant 研究助手</p>
+            <h1>把市场问题，聊清楚。</h1>
+            <p class="welcome-copy">
+              从一家公司、一条新闻或一个投资概念开始。<br />
+              我会整理思路，并尽可能展示回答依据。
+            </p>
+
+            <div class="suggestion-list" aria-label="试试这样提问">
+              <button
+                *ngFor="let suggestion of suggestions"
+                type="button"
+                (click)="askSuggestion(suggestion)"
+                [disabled]="isLoading"
+              >
+                <span>{{ suggestion }}</span>
+                <span class="suggestion-plus" aria-hidden="true">＋</span>
+              </button>
+            </div>
+          </section>
+
+          <article
+            *ngFor="let message of currentConversation.messages; trackBy: trackById"
+            class="message-row"
+            [class.user-row]="message.role === 'user'"
+            [class.assistant-row]="message.role === 'assistant'"
+          >
+            <div *ngIf="message.role === 'assistant'" class="assistant-avatar" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="m4 16 5-5 3 2.5L20 6" />
+                <path d="M15 6h5v5" />
+              </svg>
+            </div>
+
+            <div class="message-body">
+              <div class="message-meta">
+                <span>{{ message.role === 'user' ? '你' : '研究助手' }}</span>
+                <button
+                  *ngIf="message.role === 'assistant' && message.content"
+                  type="button"
+                  class="copy-button"
+                  (click)="copyAnswer(message)"
+                  [attr.aria-label]="copyStates[message.id] === 'copied' ? '已复制回答' : '复制回答'"
+                >
+                  {{
+                    copyStates[message.id] === 'copied'
+                      ? '已复制'
+                      : copyStates[message.id] === 'failed'
+                        ? '复制失败'
+                        : '复制'
+                  }}
+                </button>
+              </div>
+
+              <div *ngIf="message.role === 'user'" class="user-message">
+                {{ message.content }}
+              </div>
+
+              <div *ngIf="message.role === 'assistant'" class="assistant-message">
+                <div
+                  *ngIf="message.content"
+                  class="answer-content markdown-body"
+                  [innerHTML]="message.content | markdown"
+                ></div>
+                <p *ngIf="message.status && !message.content && isLoading" class="thinking-status">
+                  <span class="status-pulse" aria-hidden="true"></span>
+                  {{ message.status }}
+                </p>
+                <p *ngIf="message.cancelled" class="cancelled-message">
+                  {{ message.status }}
+                </p>
+                <p *ngIf="message.error" class="message-error">
+                  {{ message.error }}
+                </p>
+                <p
+                  *ngIf="message.content && message.sources?.length === 0"
+                  class="no-sources-note"
+                >
+                  此回答未附可验证的外部来源，请核对原始数据。
+                </p>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="composer-area">
+          <p *ngIf="apiError" class="request-warning" role="alert">{{ apiError }}</p>
+          <p *ngIf="storageWarning" class="storage-warning" role="status">{{ storageWarning }}</p>
+          <div class="composer">
+            <textarea
+              [(ngModel)]="userQuestion"
+              rows="2"
+              [disabled]="isLoading"
+              placeholder="输入公司、市场问题或想核对的观点…"
+              aria-label="输入你的投资研究问题"
+              (keydown)="handleKeydown($event)"
+            ></textarea>
+            <div class="composer-footer">
+              <span>Enter 发送 · Shift + Enter 换行</span>
+              <button
+                *ngIf="!isLoading"
+                class="send-button"
+                type="button"
+                [disabled]="!userQuestion.trim()"
+                (click)="sendChat()"
+              >
+                <span>发送问题</span>
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path d="M4 10h11M10 5l5 5-5 5" />
+                </svg>
+              </button>
+              <button
+                *ngIf="isLoading"
+                class="stop-button"
+                type="button"
+                (click)="stopChat()"
+              >
+                停止分析
+              </button>
+            </div>
+          </div>
+          <p class="disclaimer">
+            智能体生成的内容仅供研究参考，不构成投资建议。
+          </p>
+        </div>
+      </section>
+
+      <aside class="evidence-panel" aria-label="分析依据与执行过程">
+        <div class="evidence-heading">
+          <div>
+            <h2>分析依据</h2>
+            <p>查看本次回答引用的信息</p>
+          </div>
+          <span class="evidence-heading-mark" aria-hidden="true">↗</span>
+        </div>
+
+        <section class="evidence-section">
+          <h3>执行过程</h3>
+          <div *ngIf="isLoading" class="activity-status">
+            <span class="status-pulse" aria-hidden="true"></span>
+            {{ agentStatus || '正在准备分析' }}
+          </div>
+          <ul *ngIf="currentActivities.length" class="activity-list">
+            <li *ngFor="let activity of currentActivities; trackBy: trackById">
+              <span
+                class="activity-indicator"
+                [class.activity-complete]="activity.status === 'complete'"
+                aria-hidden="true"
+              ></span>
+              <span>{{ activity.tool }}</span>
+              <span class="activity-state">
+                {{ activity.status === 'complete' ? '已完成' : '进行中' }}
+              </span>
+            </li>
+          </ul>
+          <p *ngIf="!isLoading && !currentActivities.length" class="evidence-empty">
+            智能体调用工具后，执行步骤会显示在这里。
+          </p>
+        </section>
+
+        <section class="evidence-section source-section">
+          <div class="source-heading">
+            <h3>引用来源</h3>
+            <span>{{ currentSources.length }}</span>
+          </div>
+          <ul *ngIf="currentSources.length" class="source-list">
+            <li *ngFor="let source of currentSources">
+              <a [href]="source.url" target="_blank" rel="noopener noreferrer">
+                <span class="source-icon" aria-hidden="true">↗</span>
+                <span>{{ source.title || source.url }}</span>
+              </a>
+              <small>{{ source.url }}</small>
+            </li>
+          </ul>
+          <p *ngIf="!currentSources.length" class="evidence-empty">
+            回答中的网页引用会列在这里。没有来源时，请把结论视为未核实信息。
+          </p>
+        </section>
+
+        <div class="evidence-footnote">
+          <span class="footnote-mark" aria-hidden="true">i</span>
+          <p>
+            工具步骤反映智能体实际调用的能力。来源仅在回答明确附带链接时显示。
+          </p>
+        </div>
+      </aside>
+    </div>
+  </main>
 </div>

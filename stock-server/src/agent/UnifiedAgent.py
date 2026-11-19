@@ -7,7 +7,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
-from typing import List, Optional, Sequence
+from threading import Event
+from typing import Callable, List, Optional, Sequence
 
 from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
@@ -388,3 +389,79 @@ def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: st
             return "\n".join(str(item) for item in content)
         return str(content)
     return str(last_message)
+
+
+def stream_agent(
+    question: str,
+    config: Optional[AgentConfig] = None,
+    thread_id: str = "default",
+    on_event: Optional[Callable[[str, dict], None]] = None,
+    stop_event: Optional[Event] = None,
+) -> tuple[Optional[str], bool]:
+    """Run an agent while reporting real tool activity between graph updates."""
+    agent = _cached_agent(config)
+    logger.info(
+        "agent stream thread_id=%s question=%s",
+        thread_id,
+        preview(question),
+    )
+    final_answer = ""
+    tool_names = {}
+    started = time.perf_counter()
+
+    for update in agent.stream(
+        {"messages": [{"role": "user", "content": question}]},
+        config={"configurable": {"thread_id": thread_id}},
+        stream_mode="updates",
+    ):
+        if stop_event is not None and stop_event.is_set():
+            return None, True
+        if not isinstance(update, dict):
+            continue
+
+        for node_update in update.values():
+            if not isinstance(node_update, dict):
+                continue
+            messages = node_update.get("messages", [])
+            if not isinstance(messages, list):
+                messages = [messages]
+            for message in messages:
+                tool_calls = getattr(message, "tool_calls", []) or []
+                for tool_call in tool_calls:
+                    tool_id = tool_call.get("id")
+                    tool_name = tool_call.get("name", "工具")
+                    if tool_id:
+                        tool_names[tool_id] = tool_name
+                    if on_event is not None:
+                        on_event(
+                            "tool_start",
+                            {"tool_id": tool_id, "tool": tool_name},
+                        )
+
+                if getattr(message, "type", None) == "tool":
+                    tool_id = getattr(message, "tool_call_id", None)
+                    if on_event is not None:
+                        on_event(
+                            "tool_end",
+                            {
+                                "tool_id": tool_id,
+                                "tool": tool_names.get(
+                                    tool_id,
+                                    getattr(message, "name", "工具"),
+                                ),
+                            },
+                        )
+                elif not tool_calls and hasattr(message, "content"):
+                    content = message.content
+                    if isinstance(content, list):
+                        final_answer = "\n".join(str(item) for item in content)
+                    else:
+                        final_answer = str(content)
+
+    logger.info(
+        "agent stream finished thread_id=%s chars=%d duration=%.1f ms",
+        thread_id,
+        len(final_answer),
+        (time.perf_counter() - started) * 1000,
+    )
+    return final_answer.strip(), False

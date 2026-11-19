@@ -3,7 +3,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from threading import Event
 from unittest.mock import patch
+
+from langchain_core.messages import AIMessage, ToolMessage
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -14,6 +17,7 @@ from src.agent.UnifiedAgent import (
     _to_virtual_tool_path,
     build_agent,
     make_llm,
+    stream_agent,
 )
 from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.services.hook_runner import HookToolMiddleware
@@ -252,6 +256,80 @@ class UnifiedAgentTests(unittest.TestCase):
             with patch("src.agent.UnifiedAgent.make_llm"):
                 with self.assertRaises(FileNotFoundError):
                     build_agent(config)
+
+
+class AgentStreamingTests(unittest.TestCase):
+    class FakeAgent:
+        def stream(self, _input, config=None, **kwargs):
+            self.config = config
+            self.kwargs = kwargs
+            yield {
+                "agent": {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "id": "call-1",
+                                    "name": "quote",
+                                    "args": {},
+                                    "type": "tool_call",
+                                }
+                            ],
+                        )
+                    ]
+                }
+            }
+            yield {
+                "tools": {
+                    "messages": [
+                        ToolMessage(content="latest quote", tool_call_id="call-1", name="quote")
+                    ]
+                }
+            }
+            yield {"agent": {"messages": [AIMessage(content="分析完成")]}}
+
+    def test_stream_reports_actual_tool_start_and_completion(self):
+        agent = self.FakeAgent()
+        events = []
+        with patch("src.agent.UnifiedAgent._cached_agent", return_value=agent):
+            answer, cancelled = stream_agent(
+                "分析 TSLA",
+                thread_id="stream-thread",
+                on_event=lambda event, data: events.append((event, data)),
+            )
+
+        self.assertEqual(answer, "分析完成")
+        self.assertFalse(cancelled)
+        self.assertEqual(
+            [event for event, _data in events],
+            ["tool_start", "tool_end"],
+        )
+        self.assertEqual(events[0][1]["tool"], "quote")
+        self.assertEqual(events[1][1]["tool_id"], "call-1")
+        self.assertEqual(agent.config["configurable"]["thread_id"], "stream-thread")
+        self.assertEqual(agent.kwargs["stream_mode"], "updates")
+
+    def test_stream_stops_before_requesting_the_next_graph_update(self):
+        agent = self.FakeAgent()
+        stop_event = Event()
+        events = []
+
+        def record_event(event, data):
+            events.append((event, data))
+            if event == "tool_start":
+                stop_event.set()
+
+        with patch("src.agent.UnifiedAgent._cached_agent", return_value=agent):
+            answer, cancelled = stream_agent(
+                "分析 TSLA",
+                on_event=record_event,
+                stop_event=stop_event,
+            )
+
+        self.assertIsNone(answer)
+        self.assertTrue(cancelled)
+        self.assertEqual([event for event, _data in events], ["tool_start"])
 
 
 if __name__ == "__main__":

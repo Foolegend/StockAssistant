@@ -1,15 +1,23 @@
 import re
 import time
+from queue import Empty, Queue
+from threading import Event, Lock, Thread
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 from openai import RateLimitError
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.agent.UnifiedAgent import AgentConfig, ask_agent, default_system_prompt, make_llm
+from src.agent.UnifiedAgent import (
+    AgentConfig,
+    ask_agent,
+    default_system_prompt,
+    make_llm,
+    stream_agent,
+)
 from src.runtime.logging_config import (
     get_logger,
     new_request_id,
@@ -28,6 +36,8 @@ logger = get_logger(__name__)
 app = FastAPI(title="StockAssistant Agent")
 extension_registry = ExtensionRegistry()
 hook_runner = HookRunner(extension_registry.hooks, str(extension_registry.project_root))
+_active_runs: dict[str, Event] = {}
+_active_runs_lock = Lock()
 _GREETING_ONLY = re.compile(
     r"^(?:你好|你好呀|您好|您好呀|嗨|哈喽|hello|hi|hey|goodmorning|"
     r"goodafternoon|goodevening)$",
@@ -120,6 +130,7 @@ class AgentChatRequest(BaseModel):
 
     question: str = Field(..., description="用户提问")
     thread_id: str = Field(default_factory=lambda: str(uuid4()))
+    run_id: str = Field(default_factory=lambda: str(uuid4()))
 
 
 @app.get("/agent/catalog")
@@ -157,6 +168,7 @@ def _direct_response(thread_id: str, answer: str) -> dict:
         "message": "success",
         "data": {
             "answer": answer,
+            "sources": _extract_sources(answer),
             "agent_id": None,
             "command_id": None,
             "skills": [],
@@ -166,13 +178,38 @@ def _direct_response(thread_id: str, answer: str) -> dict:
     }
 
 
-@app.post("/agent/chat")
-def agent_chat(req: AgentChatRequest):
+def _extract_sources(answer: str) -> list[dict[str, str]]:
+    sources = []
+    seen_urls = set()
+    for label, url in re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", answer):
+        if url not in seen_urls:
+            sources.append({"title": label.strip(), "url": url})
+            seen_urls.add(url)
+    return sources
+
+
+def _run_agent_chat(
+    req: AgentChatRequest,
+    emit=None,
+    stop_event: Event | None = None,
+    streaming: bool = False,
+):
+    def report(event: str, payload: dict):
+        if emit is not None:
+            emit(event, payload)
+
+    def was_stopped() -> bool:
+        if stop_event is not None and stop_event.is_set():
+            report("cancelled", {"message": "已停止后续分析步骤"})
+            return True
+        return False
+
     logger.info(
         "chat request thread_id=%s question=%s",
         req.thread_id,
         preview(req.question),
     )
+    report("status", {"stage": "routing", "message": "正在判断问题需要哪些分析能力"})
     selection = None
     resolved = None
     if _is_greeting_only(req.question):
@@ -219,8 +256,29 @@ def agent_chat(req: AgentChatRequest):
             ) from error
 
     if resolved is None:
-        # Greetings and requests that matched no component share one direct path.
-        answer = _answer_directly(req.question)
+        if was_stopped():
+            return None
+        report("status", {"stage": "analysis", "message": "正在生成回复"})
+        if streaming:
+            answer_parts = []
+            response = make_llm().stream(
+                [
+                    SystemMessage(content=default_system_prompt()),
+                    HumanMessage(content=req.question),
+                ]
+            )
+            for chunk in response:
+                if was_stopped():
+                    return None
+                content = getattr(chunk, "content", "")
+                if isinstance(content, list):
+                    answer_parts.extend(str(item) for item in content)
+                else:
+                    answer_parts.append(str(content))
+            answer = "".join(answer_parts).strip()
+            answer = answer or "抱歉，我暂时没有生成回复，请稍后再试。"
+        else:
+            answer = _answer_directly(req.question)
         logger.info(
             "chat answered directly by model thread_id=%s reason=%s answer=%s",
             req.thread_id,
@@ -228,6 +286,9 @@ def agent_chat(req: AgentChatRequest):
             preview(answer),
         )
         return _direct_response(req.thread_id, answer)
+
+    if was_stopped():
+        return None
 
     if selection.agent_id is not None:
         try:
@@ -295,6 +356,20 @@ def agent_chat(req: AgentChatRequest):
         "command_id": command["id"] if command else None,
         "thread_id": req.thread_id,
     }
+    report(
+        "status",
+        {
+            "stage": "analysis",
+            "message": "正在分析问题"
+            if not config.mcp_servers
+            else "正在分析问题，需要时会调用数据工具",
+            "agent_id": agent_id,
+            "skills": [
+                {"id": skill_id, "name": extension_registry.skills[skill_id]["name"]}
+                for skill_id in resolved.skill_ids
+            ],
+        },
+    )
     try:
         hook_runner.run(
             "before_agent",
@@ -302,7 +377,22 @@ def agent_chat(req: AgentChatRequest):
             agent_id=agent_id,
             command_id=command["id"] if command else None,
         )
-        answer = ask_agent(question, config=config, thread_id=req.thread_id)
+        if was_stopped():
+            return None
+        if streaming:
+            answer, cancelled = stream_agent(
+                question,
+                config=config,
+                thread_id=req.thread_id,
+                on_event=emit,
+                stop_event=stop_event,
+            )
+            if cancelled:
+                report("cancelled", {"message": "已停止后续分析步骤"})
+                return None
+            answer = answer or ""
+        else:
+            answer = ask_agent(question, config=config, thread_id=req.thread_id)
         logger.info(
             "chat answer thread_id=%s agent=%s chars=%d answer=%s",
             req.thread_id,
@@ -353,6 +443,7 @@ def agent_chat(req: AgentChatRequest):
         "message": "success",
         "data": {
             "answer": answer,
+            "sources": _extract_sources(answer),
             "agent_id": agent_id,
             "command_id": command["id"] if command else None,
             "skills": [
@@ -363,3 +454,82 @@ def agent_chat(req: AgentChatRequest):
             "thread_id": req.thread_id,
         },
     }
+
+
+@app.post("/agent/chat")
+def agent_chat(req: AgentChatRequest):
+    return _run_agent_chat(req)
+
+
+def _encode_sse(event: str, payload: dict) -> str:
+    import json
+
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/agent/chat/stream")
+def agent_chat_stream(req: AgentChatRequest):
+    stop_event = Event()
+    with _active_runs_lock:
+        if req.run_id in _active_runs:
+            raise HTTPException(status_code=409, detail="该分析任务已在运行")
+        _active_runs[req.run_id] = stop_event
+
+    def event_stream():
+        events: Queue = Queue()
+        finished = object()
+
+        def emit(event: str, payload: dict):
+            events.put((event, payload))
+
+        def run():
+            try:
+                result = _run_agent_chat(
+                    req,
+                    emit=emit,
+                    stop_event=stop_event,
+                    streaming=True,
+                )
+                if result is not None:
+                    emit("complete", result["data"])
+            except HTTPException as error:
+                emit("error", {"message": str(error.detail), "status": error.status_code})
+            except Exception as error:
+                logger.exception("streaming chat failed run_id=%s", req.run_id)
+                emit("error", {"message": str(error), "status": 500})
+            finally:
+                events.put((finished, None))
+
+        worker = Thread(target=run, daemon=True)
+        worker.start()
+        try:
+            while True:
+                try:
+                    event, payload = events.get(timeout=0.25)
+                except Empty:
+                    continue
+                if event is finished:
+                    break
+                yield _encode_sse(event, payload)
+        finally:
+            if worker.is_alive():
+                stop_event.set()
+            with _active_runs_lock:
+                if _active_runs.get(req.run_id) is stop_event:
+                    del _active_runs[req.run_id]
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/agent/chat/runs/{run_id}/cancel")
+def cancel_agent_run(run_id: str):
+    with _active_runs_lock:
+        stop_event = _active_runs.get(run_id)
+    if stop_event is None:
+        raise HTTPException(status_code=404, detail="分析任务不存在或已结束")
+    stop_event.set()
+    return {"code": 0, "message": "已请求停止当前分析步骤", "data": {"run_id": run_id}}

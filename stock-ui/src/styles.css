@@ -1,1 +1,14 @@
-/* You can add global styles to this file, and also import other style files */
+@import './app/stock-chat/stock-chat.component.css';
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  background: #f5f7fa;
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+}

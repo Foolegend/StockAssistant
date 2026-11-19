@@ -1,6 +1,4 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
 
 import { StockChatComponent } from './stock-chat.component';
@@ -8,88 +6,96 @@ import { StockChatComponent } from './stock-chat.component';
 describe('StockChatComponent', () => {
   let component: StockChatComponent;
   let fixture: ComponentFixture<StockChatComponent>;
-  let httpTestingController: HttpTestingController;
 
   beforeEach(async () => {
+    localStorage.removeItem('stock-assistant-conversations-v1');
     await TestBed.configureTestingModule({
       imports: [StockChatComponent],
-      providers: [provideZonelessChangeDetection(), provideHttpClient(), provideHttpClientTesting()],
-    })
-    .compileComponents();
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
 
-    httpTestingController = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(StockChatComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
   });
 
-  afterEach(() => {
-    httpTestingController.verify();
-  });
-
-  it('should create', () => {
+  it('creates a conversation-first workspace', () => {
     expect(component).toBeTruthy();
+    expect(fixture.nativeElement.textContent).toContain('把市场问题，聊清楚。');
+    expect(fixture.nativeElement.querySelector('.evidence-panel')).toBeTruthy();
   });
 
-  it('does not expose agent or command selectors', () => {
-    expect(fixture.nativeElement.querySelectorAll('select').length).toBe(0);
-  });
-
-  it('sends only the question and conversation thread', () => {
-    component.userQuestion = '分析 TSLA';
-    component.sendChat();
-
-    const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
-    expect(request.request.body).toEqual({
-      question: '分析 TSLA',
-      thread_id: jasmine.any(String),
-    });
-    request.flush({ code: 0, data: { answer: '完成' } });
-  });
-
-  it('does not load the component catalog for chat routing', () => {
-    httpTestingController.expectNone('http://127.0.0.1:8015/agent/catalog');
-    component.userQuestion = '你好';
-    component.sendChat();
-
-    const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
-    expect(request.request.body.agent_id).toBeUndefined();
-    expect(request.request.body.command_id).toBeUndefined();
-    request.flush({ code: 0, data: { answer: '你好' } });
-  });
-
-  it('renders the answer as Markdown instead of raw text', () => {
-    component.userQuestion = '分析中兴通讯股票';
-    component.sendChat();
-
-    const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
-    request.flush({
-      code: 0,
-      data: {
-        answer: '## 决策看板\n\n| 指标 | 数值 |\n|---|---|\n| 现价 | 28.06 |',
+  it('streams real tool activity, renders the answer, and saves local history', async () => {
+    const stream = [
+      { event: 'status', data: { stage: 'routing', message: '正在判断分析能力' } },
+      { event: 'tool_start', data: { tool_id: 'tool-1', tool: '查询行情' } },
+      { event: 'tool_end', data: { tool_id: 'tool-1', tool: '查询行情' } },
+      {
+        event: 'complete',
+        data: {
+          answer: '## 分析摘要\n\n参考 [公司公告](https://example.com/report)。',
+          sources: [{ title: '公司公告', url: 'https://example.com/report' }],
+          agent_id: 'stock-analyst',
+          command_id: null,
+          model: 'test-model',
+        },
       },
-    });
+    ]
+      .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      .join('');
+    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+
+    component.userQuestion = '分析 TSLA';
+    await component.sendChat();
     fixture.detectChanges();
 
-    const answer = fixture.nativeElement.querySelector('.answer-content');
-    expect(answer.querySelector('h2')).toBeTruthy();
-    expect(answer.querySelector('table')).toBeTruthy();
-    expect(answer.textContent).toContain('28.06');
+    expect(window.fetch).toHaveBeenCalledWith(
+      `${component.apiBaseUrl}/agent/chat/stream`,
+      jasmine.objectContaining({
+        method: 'POST',
+        body: jasmine.stringMatching(/"question":"分析 TSLA"/),
+      }),
+    );
+    expect(component.currentConversation.messages[1].content).toContain('分析摘要');
+    expect(component.currentActivities[0]).toEqual({
+      id: 'tool-1',
+      tool: '查询行情',
+      status: 'complete',
+    });
+    expect(component.currentSources[0].url).toBe('https://example.com/report');
+    expect(fixture.nativeElement.querySelector('.answer-content h2')?.textContent).toContain(
+      '分析摘要',
+    );
+    expect(localStorage.getItem('stock-assistant-conversations-v1')).toContain('分析 TSLA');
   });
 
-  it('displays the backend detail for a failed request', () => {
-    component.userQuestion = '帮我分析下中兴通讯公司的股票';
-    component.sendChat();
-
-    const request = httpTestingController.expectOne('http://127.0.0.1:8015/agent/chat');
-    request.flush(
-      { detail: "Component routing failed: Router selected unknown agent 'null'" },
-      { status: 502, statusText: 'Bad Gateway' },
+  it('shows backend errors instead of a success-shaped answer', async () => {
+    spyOn(window, 'fetch').and.resolveTo(
+      new Response(JSON.stringify({ detail: 'Agent 服务暂不可用' }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      }),
     );
+
+    component.userQuestion = '分析中兴通讯';
+    await component.sendChat();
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.error')?.textContent).toContain(
-      "Router selected unknown agent 'null'",
+    expect(component.currentConversation.messages[1].error).toBe('Agent 服务暂不可用');
+    expect(fixture.nativeElement.querySelector('.message-error')?.textContent).toContain(
+      'Agent 服务暂不可用',
     );
+  });
+
+  it('starts a new thread without discarding earlier conversations', async () => {
+    const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
+    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    component.userQuestion = '第一次分析';
+    await component.sendChat();
+    const firstThread = component.currentConversation.threadId;
+
+    component.newChat();
+    expect(component.currentConversation.threadId).not.toBe(firstThread);
+    expect(component.conversations[0].threadId).toBe(firstThread);
   });
 });
