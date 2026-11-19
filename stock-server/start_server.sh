@@ -58,7 +58,18 @@ if ! "$PYTHON_EXE" -c "import uvicorn, fastapi, langchain, langgraph, deepagents
     fi
 fi
 
-# 5. 检查并释放端口
+# 5. 校验 venv 与 requirements.txt 是否一致
+#    venv 一旦建好就不会再更新，导致运行时依赖和仓库声明长期脱节。
+#    ensure_env.py 记录 requirements.txt 的哈希，不一致时自动重装依赖。
+echo "🔍 校验虚拟环境与依赖清单..."
+"$PYTHON_EXE" "$BACK_ROOT/scripts/ensure_env.py"
+if [[ $? -ne 0 ]]; then
+    echo "❌ 依赖同步失败，请手动执行：" >&2
+    echo "   \"$PYTHON_EXE\" -m pip install -r \"$REQ_FILE\"" >&2
+    exit 1
+fi
+
+# 6. 检查并释放端口
 free_port() {
     local port="$1" pids=""
     if command -v lsof >/dev/null 2>&1; then
@@ -79,7 +90,7 @@ free_port() {
 echo "🔍 检查并清理端口 $PORT..."
 free_port "$PORT"
 
-# 6. 启动 Uvicorn 服务
+# 7. 启动 Uvicorn 服务
 echo "--------------------------------------------------"
 echo "🚀 正在启动 StockAssistant 后端服务..."
 echo "端口:     http://$HOST:$PORT"

@@ -1,6 +1,10 @@
 # StockAssistant 后端直接依赖
 # 已在 Python 3.14 验证通过；README 要求 Python 3.12+
 # 安装：.venv/bin/python -m pip install -r stock-server/requirements.txt
+#
+# 注意：这里必须写全运行时真正 import 的包（尤其是技能脚本依赖），
+# 否则换台机器只装这个文件就会缺模块。start_server 脚本会校验 venv
+# 与本文件是否一致。
 
 # Web 服务
 fastapi==0.162.7
@@ -10,10 +14,36 @@ python-dotenv==1.2.4
 PyYAML==6.0.3
 
 # Agent / LLM
+# openai 必须 >=2.45.0：langchain-openai 1.8.0 声明 openai>=2.45.0。
 langchain==1.5.0
 langchain-core==1.8.0
 langchain-openai==1.8.0
-openai==2.33.0
+openai==2.54.0
 langchain-mcp-adapters==0.3.2
 langgraph==1.2.21
 deepagents==0.7.38
+
+# MCP 服务端（.stock/skills/mcp-builder 脚本直接 import mcp / anthropic）
+# mcp 必须 <2.0.0：langchain-mcp-adapters 0.3.2 要求 mcp<2.0.0,>=1.24.0，
+# 且 2.0.0~2.2.0 存在未修复漏洞（GHSA-5h93-6whr-6q8j 等 4 条）。
+# anthropic 必须 >=0.120.0：deepagents 0.7.38 → langchain-anthropic>=1.7.10 要求它。
+mcp==1.30.0
+anthropic==0.124.0
+
+# 行情数据源（.stock/skills/stock-analysis/references/stock_data_fetcher.py 直接 import）
+akshare==1.18.64
+efinance==0.5.8
+yfinance==1.4.1
+tushare==1.4.29
+pandas==3.0.2
+requests==2.33.1
+
+# 文档处理技能依赖（pdf / docx / pptx / xlsx 技能脚本）
+beautifulsoup4==4.14.3
+lxml==6.1.0
+openpyxl==3.1.5
+pypdf==7.1.0
+pdfplumber==0.11.9
+python-docx==1.2.0
+defusedxml==0.7.1
+pillow==13.0.0

@@ -1,4 +1,7 @@
-pillow>=10.0.0
+# slack-gif-creator 技能脚本依赖
+# 上限约束说明：pillow 13.0.0 之前存在 109 条安全公告（含堆溢出、越界读写、
+# 解压炸弹、ReDoS 等），全部在 13.0.0 修复，因此下限提升到 13.0.0。
+pillow>=13.0.0
 imageio>=2.31.0
 imageio-ffmpeg>=0.4.9
 numpy>=1.24.0

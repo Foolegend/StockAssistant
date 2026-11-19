@@ -54,6 +54,17 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
+# 4b. 校验 venv 与 requirements.txt 是否一致
+#     venv 一旦建好就不会再更新，导致运行时依赖和仓库声明长期脱节。
+#     ensure_env.py 记录 requirements.txt 的哈希，不一致时自动重装依赖。
+Write-Host "🔍 校验虚拟环境与依赖清单..." -ForegroundColor Gray
+& $PYTHON_EXE "$BACK_ROOT\scripts\ensure_env.py"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ 依赖同步失败，请手动执行：" -ForegroundColor Red
+    Write-Host "   $PYTHON_EXE -m pip install -r $REQ_FILE" -ForegroundColor Red
+    exit 1
+}
+
 # --- 新增：强制释放 8015 端口 ---
 Write-Host "🔍 检查并清理端口 8015..." -ForegroundColor Gray
 $proc = Get-NetTCPConnection -LocalPort 8015 -ErrorAction SilentlyContinue
