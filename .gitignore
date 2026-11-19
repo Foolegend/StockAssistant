@@ -173,3 +173,4 @@ stock-server/tmp/
 
 # Runtime logs
 stock-server/logs/
+conversation_history/
