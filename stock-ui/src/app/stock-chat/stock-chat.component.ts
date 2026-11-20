@@ -41,6 +41,21 @@ interface StreamEvent {
   data: Record<string, unknown>;
 }
 
+interface UserPreference {
+  id: number;
+  category: string;
+  content: string;
+  source: 'manual' | 'auto' | string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PreferenceCategory {
+  id: string;
+  label: string;
+}
+
 @Component({
   selector: 'app-stock-chat',
   imports: [CommonModule, FormsModule, MarkdownPipe],
@@ -54,6 +69,13 @@ export class StockChatComponent {
   ];
   readonly apiBaseUrl = 'http://127.0.0.1:8015';
   readonly copyStates: Record<string, 'idle' | 'copied' | 'failed'> = {};
+  readonly preferenceCategories: PreferenceCategory[] = [
+    { id: 'market', label: '市场' },
+    { id: 'investment', label: '投资' },
+    { id: 'style', label: '风格' },
+    { id: 'profile', label: '个人' },
+    { id: 'general', label: '其他' },
+  ];
 
   conversations: ChatConversation[] = [];
   currentConversation: ChatConversation;
@@ -62,6 +84,15 @@ export class StockChatComponent {
   agentStatus = '';
   apiError: string | null = null;
   storageWarning: string | null = null;
+
+  preferences: UserPreference[] = [];
+  preferencesOpen = false;
+  preferencesLoading = false;
+  preferencesError: string | null = null;
+  preferenceDraft = '';
+  preferenceCategory = 'general';
+  editingPreferenceId: number | null = null;
+  editingContent = '';
 
   private abortController?: AbortController;
   private activeRunId?: string;
@@ -155,6 +186,145 @@ export class StockChatComponent {
       return;
     }
     this.clearAllConversations();
+  }
+
+  exportConversation(conversation: ChatConversation): void {
+    if (!conversation.messages.length) {
+      return;
+    }
+    const lines: string[] = [
+      `# ${conversation.title}`,
+      '',
+      `- 会话 ID：${conversation.threadId}`,
+      `- 导出时间：${new Date().toLocaleString()}`,
+      '',
+    ];
+
+    for (const message of conversation.messages) {
+      lines.push(message.role === 'user' ? '## 我' : '## 研究助手');
+      lines.push('');
+      if (message.content) {
+        lines.push(message.content);
+      } else if (message.error) {
+        lines.push(`（请求失败：${message.error}）`);
+      } else if (message.cancelled) {
+        lines.push(`（已停止：${message.status ?? '用户中止'}）`);
+      } else {
+        lines.push('（无内容）');
+      }
+      if (message.sources?.length) {
+        lines.push('');
+        lines.push('参考来源：');
+        for (const source of message.sources) {
+          lines.push(`- [${source.title || source.url}](${source.url})`);
+        }
+      }
+      lines.push('');
+    }
+
+    const blob = new Blob([lines.join('\n')], {
+      type: 'text/markdown;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${this.safeFileName(conversation.title)}.md`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async openPreferences(): Promise<void> {
+    this.preferencesOpen = true;
+    this.preferencesError = null;
+    await this.loadPreferences();
+  }
+
+  closePreferences(): void {
+    this.preferencesOpen = false;
+    this.editingPreferenceId = null;
+    this.editingContent = '';
+  }
+
+  async addPreference(): Promise<void> {
+    const content = this.preferenceDraft.trim();
+    if (!content || this.preferencesLoading) {
+      return;
+    }
+    this.preferencesLoading = true;
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/agent/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, category: this.preferenceCategory }),
+      });
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      this.preferenceDraft = '';
+      this.preferencesError = null;
+      await this.loadPreferences();
+    } catch (error: unknown) {
+      this.preferencesError =
+        error instanceof Error ? error.message : '偏好保存失败';
+    } finally {
+      this.preferencesLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  startEditingPreference(preference: UserPreference): void {
+    this.editingPreferenceId = preference.id;
+    this.editingContent = preference.content;
+  }
+
+  cancelEditingPreference(): void {
+    this.editingPreferenceId = null;
+    this.editingContent = '';
+  }
+
+  async savePreferenceContent(preference: UserPreference): Promise<void> {
+    const content = this.editingContent.trim();
+    if (!content) {
+      return;
+    }
+    await this.patchPreference(preference.id, { content });
+    this.cancelEditingPreference();
+  }
+
+  async togglePreference(preference: UserPreference): Promise<void> {
+    await this.patchPreference(preference.id, { enabled: !preference.enabled });
+  }
+
+  async deletePreference(preference: UserPreference): Promise<void> {
+    if (this.preferencesLoading) {
+      return;
+    }
+    this.preferencesLoading = true;
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/agent/preferences/${preference.id}`,
+        { method: 'DELETE' },
+      );
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      this.preferences = this.preferences.filter((item) => item.id !== preference.id);
+      this.preferencesError = null;
+    } catch (error: unknown) {
+      this.preferencesError =
+        error instanceof Error ? error.message : '偏好删除失败';
+    } finally {
+      this.preferencesLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  categoryLabel(category: string): string {
+    return (
+      this.preferenceCategories.find((item) => item.id === category)?.label ?? '其他'
+    );
   }
 
   askSuggestion(question: string): void {
@@ -495,5 +665,80 @@ export class StockChatComponent {
       // The conversation is removed locally regardless; server-side cleanup
       // is best effort.
     }
+  }
+
+  private async loadPreferences(): Promise<void> {
+    this.preferencesLoading = true;
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/agent/preferences`);
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      const body: unknown = await response.json();
+      const data =
+        typeof body === 'object' && body !== null
+          ? (body as { data?: { preferences?: unknown } }).data
+          : undefined;
+      const list = Array.isArray(data?.preferences) ? data.preferences : [];
+      this.preferences = list.filter(
+        (item): item is UserPreference =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as UserPreference).id === 'number' &&
+          typeof (item as UserPreference).content === 'string',
+      );
+      this.preferencesError = null;
+    } catch (error: unknown) {
+      this.preferencesError =
+        error instanceof Error ? error.message : '偏好加载失败';
+    } finally {
+      this.preferencesLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  private async patchPreference(
+    preferenceId: number,
+    changes: { content?: string; enabled?: boolean },
+  ): Promise<void> {
+    if (this.preferencesLoading) {
+      return;
+    }
+    this.preferencesLoading = true;
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/agent/preferences/${preferenceId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(changes),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      const body: unknown = await response.json();
+      const updated =
+        typeof body === 'object' && body !== null
+          ? (body as { data?: { preference?: UserPreference } }).data?.preference
+          : undefined;
+      if (updated) {
+        this.preferences = this.preferences.map((item) =>
+          item.id === updated.id ? updated : item,
+        );
+      }
+      this.preferencesError = null;
+    } catch (error: unknown) {
+      this.preferencesError =
+        error instanceof Error ? error.message : '偏好更新失败';
+    } finally {
+      this.preferencesLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  private safeFileName(title: string): string {
+    const cleaned = title.replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '');
+    return cleaned || 'conversation';
   }
 }

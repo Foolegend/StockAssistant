@@ -12,74 +12,26 @@ when the router sends some turns to an agent and answers others directly.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
-from threading import RLock
 
 from src.runtime.logging_config import get_logger
+from src.services.db import get_connection
 
 logger = get_logger(__name__)
 
 _MAX_HISTORY_MESSAGES = 40
 _MAX_HISTORY_CHARS = 12000
 
-_connection: sqlite3.Connection | None = None
-_connection_lock = RLock()
-_connection_path: str | None = None
-
 
 def _connect() -> sqlite3.Connection:
-    """Return the shared history connection, creating it on first use."""
-    global _connection, _connection_path
-
-    from src.services.checkpoint_store import checkpoint_db_path
-
-    db_path = checkpoint_db_path()
-    if db_path == ":memory:":
-        # An in-memory database has no shared state between connections, so
-        # the direct path simply keeps no history in that mode.
-        raise RuntimeError("in-memory checkpoint store has no persistent history")
-
-    with _connection_lock:
-        if _connection is not None and _connection_path == db_path:
-            return _connection
-        if _connection is not None:
-            try:
-                _connection.close()
-            except Exception:  # noqa: BLE001
-                logger.debug("failed to close the previous history connection", exc_info=True)
-        path = Path(db_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(str(path), check_same_thread=False)
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS thread_messages (
-                thread_id TEXT NOT NULL,
-                seq INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                PRIMARY KEY (thread_id, seq)
-            )
-            """
-        )
-        connection.commit()
-        _connection = connection
-        _connection_path = db_path
-        return _connection
+    """Return the shared connection to the application tables."""
+    return get_connection()
 
 
 def close_history_connection() -> None:
-    """Release the shared history connection."""
-    global _connection, _connection_path
-    with _connection_lock:
-        connection = _connection
-        _connection = None
-        _connection_path = None
-    if connection is None:
-        return
-    try:
-        connection.close()
-    except Exception:  # noqa: BLE001
-        logger.debug("failed to close the history connection", exc_info=True)
+    """Kept for symmetry with the other stores; the connection is shared."""
+    from src.services.db import close_connection
+
+    close_connection()
 
 
 def append_messages(thread_id: str, role: str, content: str) -> None:

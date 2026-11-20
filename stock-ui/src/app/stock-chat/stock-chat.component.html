@@ -34,6 +34,16 @@
             <span class="conversation-title">{{ conversation.title }}</span>
           </button>
           <button
+            class="conversation-export"
+            type="button"
+            [disabled]="isLoading || !conversation.messages.length"
+            (click)="exportConversation(conversation)"
+            [attr.aria-label]="'导出会话：' + conversation.title"
+            title="导出为 Markdown"
+          >
+            <span aria-hidden="true">⤓</span>
+          </button>
+          <button
             class="conversation-delete"
             type="button"
             [disabled]="isLoading"
@@ -60,6 +70,15 @@
     </div>
 
     <div class="sidebar-bottom">
+      <button
+        class="preferences-button"
+        type="button"
+        (click)="openPreferences()"
+        aria-label="管理长期偏好"
+      >
+        <span aria-hidden="true">◎</span>
+        <span>长期偏好</span>
+      </button>
       <div class="privacy-note">
         <span class="privacy-dot" aria-hidden="true"></span>
         <span>仅用于研究参考</span>
@@ -281,4 +300,109 @@
       </aside>
     </div>
   </main>
+
+  <div
+    *ngIf="preferencesOpen"
+    class="modal-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-label="长期偏好"
+    (click)="closePreferences()"
+  >
+    <div class="modal" (click)="$event.stopPropagation()">
+      <header class="modal-header">
+        <div>
+          <h2>长期偏好</h2>
+          <p>跨会话生效，会注入到每次对话的上下文中。可手动添加，也会从对话中自动提取。</p>
+        </div>
+        <button
+          class="modal-close"
+          type="button"
+          (click)="closePreferences()"
+          aria-label="关闭"
+        >
+          ✕
+        </button>
+      </header>
+
+      <div *ngIf="preferencesError" class="modal-error" role="alert">
+        {{ preferencesError }}
+      </div>
+
+      <div class="preference-form">
+        <select
+          class="preference-category"
+          [(ngModel)]="preferenceCategory"
+          aria-label="偏好分类"
+        >
+          <option *ngFor="let category of preferenceCategories" [ngValue]="category.id">
+            {{ category.label }}
+          </option>
+        </select>
+        <input
+          class="preference-input"
+          type="text"
+          [(ngModel)]="preferenceDraft"
+          (keydown.enter)="addPreference()"
+          placeholder="例如：只关注 A 股，偏好短线，不追高"
+          aria-label="新增偏好"
+          maxlength="200"
+        />
+        <button
+          class="preference-add"
+          type="button"
+          [disabled]="!preferenceDraft.trim() || preferencesLoading"
+          (click)="addPreference()"
+        >
+          添加
+        </button>
+      </div>
+
+      <p *ngIf="preferencesLoading" class="modal-hint">处理中…</p>
+
+      <ul *ngIf="preferences.length" class="preference-list">
+        <li
+          *ngFor="let preference of preferences"
+          class="preference-item"
+          [class.disabled]="!preference.enabled"
+        >
+          <span class="preference-chip">{{ categoryLabel(preference.category) }}</span>
+
+          <ng-container *ngIf="editingPreferenceId !== preference.id; else editing">
+            <span class="preference-text">{{ preference.content }}</span>
+            <span class="preference-source" [title]="preference.source === 'auto' ? '从对话中自动提取' : '手动添加'">
+              {{ preference.source === 'auto' ? '自动' : '手动' }}
+            </span>
+            <span class="preference-actions">
+              <button type="button" (click)="startEditingPreference(preference)">编辑</button>
+              <button type="button" (click)="togglePreference(preference)">
+                {{ preference.enabled ? '停用' : '启用' }}
+              </button>
+              <button type="button" class="danger" (click)="deletePreference(preference)">删除</button>
+            </span>
+          </ng-container>
+
+          <ng-template #editing>
+            <input
+              class="preference-edit-input"
+              type="text"
+              [(ngModel)]="editingContent"
+              (keydown.enter)="savePreferenceContent(preference)"
+              (keydown.escape)="cancelEditingPreference()"
+              aria-label="编辑偏好"
+              maxlength="200"
+            />
+            <span class="preference-actions">
+              <button type="button" (click)="savePreferenceContent(preference)">保存</button>
+              <button type="button" (click)="cancelEditingPreference()">取消</button>
+            </span>
+          </ng-template>
+        </li>
+      </ul>
+
+      <p *ngIf="!preferences.length && !preferencesLoading" class="modal-empty">
+        还没有记录长期偏好。你可以在对话中直接说“记住我只做 A 股”，或者在上方手动添加。
+      </p>
+    </div>
+  </div>
 </div>

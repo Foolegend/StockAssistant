@@ -157,12 +157,12 @@ app-stock-chat {
   font-size: 17px;
 }
 
+.conversation-export,
 .conversation-delete {
   display: grid;
   flex: 0 0 auto;
   width: 24px;
   height: 24px;
-  margin-right: 5px;
   padding: 0;
   place-items: center;
   border: 0;
@@ -177,13 +177,25 @@ app-stock-chat {
   transition: opacity 0.12s ease-in-out;
 }
 
+.conversation-delete {
+  margin-right: 5px;
+}
+
+.conversation-item:hover .conversation-export,
 .conversation-item:hover .conversation-delete,
+.conversation-export:focus-visible,
 .conversation-delete:focus-visible {
   opacity: 1;
 }
 
-/* Touch devices have no hover state, so the delete button stays visible. */
+.conversation-export:hover:not(:disabled) {
+  color: #c7dcf5;
+  background: rgba(120, 165, 220, 0.2);
+}
+
+/* Touch devices have no hover state, so the action buttons stay visible. */
 @media (hover: none) {
+  .conversation-export,
   .conversation-delete {
     opacity: 1;
   }
@@ -237,6 +249,34 @@ app-stock-chat {
 
 .sidebar-bottom p {
   margin: 7px 0 0;
+}
+
+.preferences-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  margin-bottom: 12px;
+  padding: 0 9px;
+  border: 1px solid rgba(221, 233, 250, 0.16);
+  border-radius: 6px;
+  color: #c6d0dd;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preferences-button span:first-child {
+  color: #9cb4d3;
+  font-size: 14px;
+}
+
+.preferences-button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .privacy-note {
@@ -1065,5 +1105,247 @@ button:disabled {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(21, 33, 48, 0.45);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 620px);
+  max-height: min(85vh, 720px);
+  overflow: auto;
+  padding: 22px 24px 20px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(20, 34, 52, 0.28);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e8edf2;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: #22364b;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.modal-header p {
+  margin: 6px 0 0;
+  color: #7b8898;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.modal-close {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #7b8898;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  color: #31435a;
+  background: #eef2f7;
+}
+
+.modal-error {
+  margin-top: 14px;
+  padding: 8px 11px;
+  border: 1px solid #e7c7bd;
+  border-radius: 6px;
+  color: #9a493c;
+  background: #fff9f6;
+  font-size: 11px;
+}
+
+.modal-hint,
+.modal-empty {
+  margin: 14px 0 0;
+  color: #8b97a6;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.preference-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.preference-category,
+.preference-input,
+.preference-edit-input {
+  padding: 0 10px;
+  border: 1px solid #d9e1ea;
+  border-radius: 6px;
+  color: #2a3b50;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+
+.preference-category {
+  flex: 0 0 82px;
+  height: 34px;
+}
+
+.preference-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+}
+
+.preference-input:focus,
+.preference-edit-input:focus,
+.preference-category:focus {
+  border-color: #96b1d3;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(70, 116, 174, 0.09);
+}
+
+.preference-add {
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  color: #fff;
+  background: #315f9b;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.preference-add:hover:not(:disabled) {
+  background: #254c7e;
+}
+
+.preference-add:disabled {
+  color: #a8b4c2;
+  background: #e8edf2;
+  cursor: not-allowed;
+}
+
+.preference-list {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preference-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid #e4eaf1;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.preference-item.disabled {
+  opacity: 0.55;
+}
+
+.preference-chip {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #4c6685;
+  background: #e9f0f8;
+  font-size: 10px;
+}
+
+.preference-text {
+  flex: 1;
+  min-width: 160px;
+  color: #33465c;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.preference-edit-input {
+  flex: 1;
+  min-width: 160px;
+  height: 30px;
+}
+
+.preference-source {
+  flex: 0 0 auto;
+  color: #9aa5b2;
+  font-size: 9px;
+}
+
+.preference-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.preference-actions button {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px;
+  color: #64758a;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.preference-actions button:hover {
+  color: #285d9f;
+  background: #edf3fa;
+}
+
+.preference-actions button.danger:hover {
+  color: #a8503f;
+  background: #fbefec;
+}
+
+@media (max-width: 560px) {
+  .preference-form {
+    flex-wrap: wrap;
+  }
+
+  .preference-category {
+    flex: 0 0 100%;
+  }
+
+  .preference-input {
+    flex: 1 1 60%;
+  }
+
+  .preference-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
   }
 }
