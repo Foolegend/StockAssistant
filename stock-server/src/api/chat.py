@@ -30,6 +30,11 @@ from src.services.component_dependencies import resolve_component_dependencies
 from src.services.component_router import select_components
 from src.services.extension_registry import ExtensionRegistry
 from src.services.hook_runner import HookExecutionError, HookRunner
+from src.services.thread_history import (
+    append_messages,
+    build_history_context,
+    clear_messages,
+)
 
 setup_logging()
 logger = get_logger(__name__)
@@ -148,14 +153,23 @@ def _is_greeting_only(question: str) -> bool:
     return bool(_GREETING_ONLY.fullmatch(normalized))
 
 
-def _answer_directly(question: str) -> str:
-    """Answer a simple conversational message with the model, skipping routing."""
-    response = make_llm().invoke(
-        [
-            SystemMessage(content=default_system_prompt()),
-            HumanMessage(content=question),
-        ]
-    )
+def _answer_directly(question: str, thread_id: str = "") -> str:
+    """Answer a simple conversational message with the model, skipping routing.
+
+    The thread's recent turns are supplied as context so that a conversation
+    that mixes direct answers with agent runs still reads as one thread.
+    """
+    messages: list = [SystemMessage(content=default_system_prompt())]
+    history = build_history_context(thread_id) if thread_id else ""
+    if history:
+        messages.append(
+            SystemMessage(
+                content=f"以下是本次会话此前的对话记录，请据此保持上下文一致：\n{history}"
+            )
+        )
+    messages.append(HumanMessage(content=question))
+
+    response = make_llm().invoke(messages)
     content = response.content
     if isinstance(content, list):
         content = "\n".join(str(item) for item in content)
@@ -262,12 +276,16 @@ def _run_agent_chat(
         report("status", {"stage": "analysis", "message": "正在生成回复"})
         if streaming:
             answer_parts = []
-            response = make_llm().stream(
-                [
-                    SystemMessage(content=default_system_prompt()),
-                    HumanMessage(content=req.question),
-                ]
-            )
+            history = build_history_context(req.thread_id)
+            stream_messages: list = [SystemMessage(content=default_system_prompt())]
+            if history:
+                stream_messages.append(
+                    SystemMessage(
+                        content=f"以下是本次会话此前的对话记录，请据此保持上下文一致：\n{history}"
+                    )
+                )
+            stream_messages.append(HumanMessage(content=req.question))
+            response = make_llm().stream(stream_messages)
             for chunk in response:
                 if was_stopped():
                     return None
@@ -279,7 +297,9 @@ def _run_agent_chat(
             answer = "".join(answer_parts).strip()
             answer = answer or "抱歉，我暂时没有生成回复，请稍后再试。"
         else:
-            answer = _answer_directly(req.question)
+            answer = _answer_directly(req.question, req.thread_id)
+        append_messages(req.thread_id, "user", req.question)
+        append_messages(req.thread_id, "assistant", answer)
         logger.info(
             "chat answered directly by model thread_id=%s reason=%s answer=%s",
             req.thread_id,
@@ -394,6 +414,10 @@ def _run_agent_chat(
             answer = answer or ""
         else:
             answer = ask_agent(question, config=config, thread_id=req.thread_id)
+        # Keep the shared history in step with the agent's own checkpoints so
+        # that a later direct answer still knows what the thread discussed.
+        append_messages(req.thread_id, "user", req.question)
+        append_messages(req.thread_id, "assistant", answer)
         logger.info(
             "chat answer thread_id=%s agent=%s chars=%d answer=%s",
             req.thread_id,
@@ -542,6 +566,7 @@ def delete_agent_thread(thread_id: str):
     if not thread_id.strip():
         raise HTTPException(status_code=400, detail="会话 ID 不能为空")
     summary = delete_thread_memory(thread_id)
+    summary["cleared_messages"] = clear_messages(thread_id)
     return {
         "code": 0,
         "message": "success",

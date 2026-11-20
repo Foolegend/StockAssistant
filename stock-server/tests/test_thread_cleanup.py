@@ -125,6 +125,9 @@ class ThreadCleanupTests(unittest.TestCase):
         with patch(
             "src.agent.UnifiedAgent._cached_agents",
             return_value=[_FakeAgent(saver, self.root)],
+        ), patch(
+            "src.agent.UnifiedAgent.get_checkpointer",
+            return_value=saver,
         ):
             summary = delete_thread_memory("thread-1")
 
@@ -133,19 +136,40 @@ class ThreadCleanupTests(unittest.TestCase):
         self.assertFalse(archive.exists())
         self.assertEqual(list(saver.list({"configurable": {"thread_id": "thread-1"}})), [])
 
-    def test_delete_thread_memory_sweeps_every_cached_agent(self):
-        first = MemorySaver()
-        second = MemorySaver()
-        for saver in (first, second):
-            self._put(saver, "thread-1", {"messages": []})
+    def test_delete_thread_memory_uses_the_shared_saver(self):
+        """All agents share one saver, so one sweep clears every instance."""
+        shared = MemorySaver()
+        self._put(shared, "thread-1", {"messages": []})
 
-        agents = [_FakeAgent(first), _FakeAgent(second)]
-        with patch("src.agent.UnifiedAgent._cached_agents", return_value=agents):
+        agents = [_FakeAgent(shared), _FakeAgent(shared)]
+        with patch(
+            "src.agent.UnifiedAgent._cached_agents",
+            return_value=agents,
+        ), patch(
+            "src.agent.UnifiedAgent.get_checkpointer",
+            return_value=shared,
+        ):
             summary = delete_thread_memory("thread-1")
 
-        self.assertEqual(summary["cleared_agents"], 2)
-        for saver in (first, second):
-            self.assertEqual(list(saver.list({"configurable": {"thread_id": "thread-1"}})), [])
+        self.assertEqual(summary["cleared_agents"], 1)
+        self.assertEqual(list(shared.list({"configurable": {"thread_id": "thread-1"}})), [])
+
+    def test_delete_thread_memory_clears_the_thread_without_any_cached_agent(self):
+        """A thread answered directly still has to be cleared."""
+        shared = MemorySaver()
+        self._put(shared, "thread-1", {"messages": []})
+
+        with patch(
+            "src.agent.UnifiedAgent._cached_agents",
+            return_value=[],
+        ), patch(
+            "src.agent.UnifiedAgent.get_checkpointer",
+            return_value=shared,
+        ):
+            summary = delete_thread_memory("thread-1")
+
+        self.assertEqual(summary["cleared_agents"], 1)
+        self.assertEqual(list(shared.list({"configurable": {"thread_id": "thread-1"}})), [])
 
     def test_api_endpoint_rejects_a_blank_thread_id(self):
         with self.assertRaises(HTTPException) as error:

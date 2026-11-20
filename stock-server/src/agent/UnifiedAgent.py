@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -15,10 +16,10 @@ from deepagents.backends import LocalShellBackend
 from dotenv import dotenv_values, load_dotenv
 from langchain_openai import ChatOpenAI
 from openai import RateLimitError
-from langgraph.checkpoint.memory import MemorySaver
 
 from src.agent.selected_skills_middleware import SelectedSkillsMiddleware
 from src.config.settings import get_settings
+from src.services.checkpoint_store import get_checkpointer
 from src.mcp.client import load_mcp_tools_for_agent
 from src.runtime.encoding import install_tolerant_subprocess
 from src.runtime.logging_config import get_logger, preview, setup_logging
@@ -330,7 +331,7 @@ def build_agent(config: Optional[AgentConfig] = None, **overrides):
         subagents=subagents or None,
         backend=backend,
         system_prompt=cfg.system_prompt or default_system_prompt(),
-        checkpointer=MemorySaver(),
+        checkpointer=get_checkpointer(),
         debug=cfg.debug,
     )
     logger.info("agent built in %.1f ms", (time.perf_counter() - started) * 1000)
@@ -512,9 +513,10 @@ def _agent_project_root(agent) -> Path:
 def delete_thread_memory(thread_id: str) -> dict:
     """Erase every trace of a conversation thread from the server.
 
-    Agents are cached per configuration fingerprint, so one thread can have
-    checkpoints spread over several instances.  All of them are swept, and the
-    archive files the middlewares offloaded are removed as well.
+    All agents share one checkpointer, so deleting the thread there clears it
+    everywhere.  The agent cache is swept as well so that the archive files
+    the middlewares offloaded are removed too -- their paths live in the
+    checkpoints, so they have to be read before the thread is dropped.
 
     Returns a summary of what was deleted.
     """
@@ -525,32 +527,33 @@ def delete_thread_memory(thread_id: str) -> dict:
     )
 
     archive_paths: list[str] = []
-    cleared_agents = 0
+    project_roots: list[Path] = []
 
     for agent in _cached_agents():
-        checkpointer = getattr(agent, "checkpointer", None)
-        if checkpointer is None:
-            continue
-        archive_paths.extend(collect_thread_archive_paths(checkpointer, thread_id))
-        if delete_saver_thread(checkpointer, thread_id):
-            cleared_agents += 1
+        project_roots.append(_agent_project_root(agent))
+
+    # The shared saver is the one that actually stores the checkpoints.  It
+    # must be swept even when no agent is cached, otherwise a thread that was
+    # only ever answered directly would keep its history.  The archive paths
+    # are read from it before the thread is dropped.
+    shared = get_checkpointer()
+    archive_paths.extend(collect_thread_archive_paths(shared, thread_id))
+    cleared = 1 if delete_saver_thread(shared, thread_id) else 0
 
     removed_files: list[str] = []
-    for agent in _cached_agents():
+    for project_root in project_roots or [Path(PROJECT_ROOT)]:
         removed_files.extend(
-            delete_archive_files(
-                dict.fromkeys(archive_paths), _agent_project_root(agent)
-            )
+            delete_archive_files(dict.fromkeys(archive_paths), project_root)
         )
 
     logger.info(
         "thread memory deleted thread_id=%s agents=%d files=%d",
         thread_id,
-        cleared_agents,
+        cleared,
         len(removed_files),
     )
     return {
         "thread_id": thread_id,
-        "cleared_agents": cleared_agents,
+        "cleared_agents": cleared,
         "deleted_files": len(removed_files),
     }

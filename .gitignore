@@ -174,3 +174,6 @@ stock-server/tmp/
 # Runtime logs
 stock-server/logs/
 conversation_history/
+
+# Persistent conversation checkpoints and history
+stock-server/data/
