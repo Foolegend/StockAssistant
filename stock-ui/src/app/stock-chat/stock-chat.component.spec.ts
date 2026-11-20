@@ -98,4 +98,92 @@ describe('StockChatComponent', () => {
     expect(component.currentConversation.threadId).not.toBe(firstThread);
     expect(component.conversations[0].threadId).toBe(firstThread);
   });
+
+  it('deletes a conversation from the list and from local storage', async () => {
+    const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
+    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    component.userQuestion = '待删除的分析';
+    await component.sendChat();
+    const threadId = component.currentConversation.threadId;
+    expect(component.conversations.length).toBe(1);
+
+    component.deleteConversation(component.conversations[0]);
+    fixture.detectChanges();
+
+    expect(component.conversations.length).toBe(0);
+    expect(localStorage.getItem('stock-assistant-conversations-v1')).not.toContain(threadId);
+    // Deleting the open conversation starts a fresh one.
+    expect(component.currentConversation.threadId).not.toBe(threadId);
+    expect(component.currentConversation.messages.length).toBe(0);
+  });
+
+  it('keeps the open conversation when a different one is deleted', async () => {
+    const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
+    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    component.userQuestion = '第一条';
+    await component.sendChat();
+    const firstThread = component.currentConversation.threadId;
+
+    component.newChat();
+    component.userQuestion = '第二条';
+    await component.sendChat();
+    const secondThread = component.currentConversation.threadId;
+    expect(component.conversations.length).toBe(2);
+
+    component.deleteConversation(
+      component.conversations.find((item) => item.threadId === firstThread)!,
+    );
+    fixture.detectChanges();
+
+    expect(component.conversations.length).toBe(1);
+    expect(component.conversations[0].threadId).toBe(secondThread);
+    expect(component.currentConversation.threadId).toBe(secondThread);
+  });
+
+  it('asks the server to release the deleted thread', async () => {
+    const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
+    const fetchSpy = spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    component.userQuestion = '需要释放';
+    await component.sendChat();
+    const threadId = component.currentConversation.threadId;
+
+    component.deleteConversation(component.conversations[0]);
+    await fixture.whenStable();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `${component.apiBaseUrl}/agent/threads/${encodeURIComponent(threadId)}`,
+      jasmine.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('clears every conversation after confirmation', async () => {
+    const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
+    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    component.userQuestion = '第一条';
+    await component.sendChat();
+    component.newChat();
+    component.userQuestion = '第二条';
+    await component.sendChat();
+    expect(component.conversations.length).toBe(2);
+
+    spyOn(window, 'confirm').and.returnValue(true);
+    component.confirmClearAll();
+    fixture.detectChanges();
+
+    expect(component.conversations.length).toBe(0);
+    expect(component.currentConversation.messages.length).toBe(0);
+    expect(localStorage.getItem('stock-assistant-conversations-v1')).not.toContain('第一条');
+  });
+
+  it('keeps conversations when the clear confirmation is declined', async () => {
+    const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
+    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    component.userQuestion = '保留';
+    await component.sendChat();
+
+    spyOn(window, 'confirm').and.returnValue(false);
+    component.confirmClearAll();
+
+    expect(component.conversations.length).toBe(1);
+  });
 });

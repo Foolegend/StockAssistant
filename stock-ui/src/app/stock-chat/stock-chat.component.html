@@ -18,22 +18,45 @@
     <div class="sidebar-section">
       <p class="sidebar-label">最近研究</p>
       <nav class="conversation-list" aria-label="最近研究">
-        <button
+        <div
           *ngFor="let conversation of conversations"
-          class="conversation-link"
+          class="conversation-item"
           [class.selected]="conversation.threadId === currentConversation.threadId"
-          type="button"
-          [disabled]="isLoading"
-          (click)="openConversation(conversation)"
-          [title]="conversation.title"
         >
-          <span class="conversation-glyph" aria-hidden="true">◌</span>
-          <span>{{ conversation.title }}</span>
-        </button>
+          <button
+            class="conversation-link"
+            type="button"
+            [disabled]="isLoading"
+            (click)="openConversation(conversation)"
+            [title]="conversation.title"
+          >
+            <span class="conversation-glyph" aria-hidden="true">◌</span>
+            <span class="conversation-title">{{ conversation.title }}</span>
+          </button>
+          <button
+            class="conversation-delete"
+            type="button"
+            [disabled]="isLoading"
+            (click)="deleteConversation(conversation)"
+            [attr.aria-label]="'删除会话：' + conversation.title"
+            title="删除这条会话"
+          >
+            <span aria-hidden="true">✕</span>
+          </button>
+        </div>
         <p *ngIf="!conversations.length" class="empty-history">
           你的分析记录会保存在这里
         </p>
       </nav>
+      <button
+        *ngIf="conversations.length"
+        class="clear-all-button"
+        type="button"
+        [disabled]="isLoading"
+        (click)="confirmClearAll()"
+      >
+        清空全部记录
+      </button>
     </div>
 
     <div class="sidebar-bottom">

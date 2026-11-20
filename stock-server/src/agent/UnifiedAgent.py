@@ -365,6 +365,12 @@ def _cached_agent(config: Optional[AgentConfig]):
         return _AGENT_CACHE[fingerprint]
 
 
+def _cached_agents() -> list:
+    """Return every cached agent instance."""
+    with _AGENT_CACHE_LOCK:
+        return list(_AGENT_CACHE.values())
+
+
 def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: str = "default") -> str:
     agent = _cached_agent(config)
     logger.info(
@@ -487,3 +493,64 @@ def stream_agent(
         (time.perf_counter() - started) * 1000,
     )
     return final_answer.strip(), False
+
+
+def _agent_project_root(agent) -> Path:
+    """Best-effort project root of a cached agent.
+
+    The offload middlewares write their archives relative to the backend's
+    virtual root, which is the agent's project root.  Fall back to the
+    process-wide root when it cannot be determined.
+    """
+    backend = getattr(agent, "backend", None)
+    cwd = getattr(backend, "cwd", None)
+    if cwd:
+        return Path(str(cwd))
+    return Path(PROJECT_ROOT)
+
+
+def delete_thread_memory(thread_id: str) -> dict:
+    """Erase every trace of a conversation thread from the server.
+
+    Agents are cached per configuration fingerprint, so one thread can have
+    checkpoints spread over several instances.  All of them are swept, and the
+    archive files the middlewares offloaded are removed as well.
+
+    Returns a summary of what was deleted.
+    """
+    from src.services.thread_cleanup import (
+        collect_thread_archive_paths,
+        delete_archive_files,
+        delete_thread_memory as delete_saver_thread,
+    )
+
+    archive_paths: list[str] = []
+    cleared_agents = 0
+
+    for agent in _cached_agents():
+        checkpointer = getattr(agent, "checkpointer", None)
+        if checkpointer is None:
+            continue
+        archive_paths.extend(collect_thread_archive_paths(checkpointer, thread_id))
+        if delete_saver_thread(checkpointer, thread_id):
+            cleared_agents += 1
+
+    removed_files: list[str] = []
+    for agent in _cached_agents():
+        removed_files.extend(
+            delete_archive_files(
+                dict.fromkeys(archive_paths), _agent_project_root(agent)
+            )
+        )
+
+    logger.info(
+        "thread memory deleted thread_id=%s agents=%d files=%d",
+        thread_id,
+        cleared_agents,
+        len(removed_files),
+    )
+    return {
+        "thread_id": thread_id,
+        "cleared_agents": cleared_agents,
+        "deleted_files": len(removed_files),
+    }

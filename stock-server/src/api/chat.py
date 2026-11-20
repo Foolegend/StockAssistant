@@ -15,6 +15,7 @@ from src.agent.UnifiedAgent import (
     AgentConfig,
     ask_agent,
     default_system_prompt,
+    delete_thread_memory,
     make_llm,
     stream_agent,
 )
@@ -533,3 +534,16 @@ def cancel_agent_run(run_id: str):
         raise HTTPException(status_code=404, detail="分析任务不存在或已结束")
     stop_event.set()
     return {"code": 0, "message": "已请求停止当前分析步骤", "data": {"run_id": run_id}}
+
+
+@app.delete("/agent/threads/{thread_id}")
+def delete_agent_thread(thread_id: str):
+    """Erase the server-side memory of a conversation thread."""
+    if not thread_id.strip():
+        raise HTTPException(status_code=400, detail="会话 ID 不能为空")
+    summary = delete_thread_memory(thread_id)
+    return {
+        "code": 0,
+        "message": "success",
+        "data": summary,
+    }

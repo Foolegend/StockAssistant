@@ -103,11 +103,26 @@ app-stock-chat {
   gap: 4px;
 }
 
-.conversation-link {
+.conversation-item {
   display: flex;
   align-items: center;
+  border-radius: 6px;
+}
+
+.conversation-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.conversation-item.selected {
+  background: rgba(215, 229, 248, 0.14);
+}
+
+.conversation-link {
+  display: flex;
+  flex: 1;
+  align-items: center;
   gap: 9px;
-  width: 100%;
+  min-width: 0;
   min-height: 37px;
   padding: 0 10px;
   overflow: hidden;
@@ -121,7 +136,8 @@ app-stock-chat {
   cursor: pointer;
 }
 
-.conversation-link span:last-child {
+.conversation-link span:last-child,
+.conversation-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -129,12 +145,78 @@ app-stock-chat {
 
 .conversation-link.selected {
   color: #fff;
-  background: rgba(215, 229, 248, 0.14);
+}
+
+.conversation-item.selected .conversation-link {
+  background: transparent;
 }
 
 .conversation-glyph {
+  flex: 0 0 auto;
   color: #9cb4d3;
   font-size: 17px;
+}
+
+.conversation-delete {
+  display: grid;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-right: 5px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  color: #8fa3ba;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease-in-out;
+}
+
+.conversation-item:hover .conversation-delete,
+.conversation-delete:focus-visible {
+  opacity: 1;
+}
+
+/* Touch devices have no hover state, so the delete button stays visible. */
+@media (hover: none) {
+  .conversation-delete {
+    opacity: 1;
+  }
+}
+
+.conversation-delete:hover:not(:disabled) {
+  color: #f0c4bc;
+  background: rgba(190, 90, 74, 0.24);
+}
+
+.conversation-delete:disabled {
+  cursor: not-allowed;
+}
+
+.clear-all-button {
+  margin: 12px 9px 0;
+  padding: 0;
+  border: 0;
+  color: #8494a9;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.clear-all-button:hover:not(:disabled) {
+  color: #e0a99f;
+}
+
+.clear-all-button:disabled {
+  cursor: not-allowed;
 }
 
 .empty-history {

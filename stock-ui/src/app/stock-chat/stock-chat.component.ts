@@ -112,6 +112,51 @@ export class StockChatComponent {
     this.agentStatus = '';
   }
 
+  deleteConversation(conversation: ChatConversation): void {
+    if (this.isLoading) {
+      return;
+    }
+    this.conversations = this.conversations.filter(
+      (item) => item.threadId !== conversation.threadId,
+    );
+    if (this.currentConversation.threadId === conversation.threadId) {
+      this.currentConversation = this.createConversation();
+      this.userQuestion = '';
+      this.apiError = null;
+      this.agentStatus = '';
+    }
+    this.persistConversations();
+    this.cdr.detectChanges();
+    void this.releaseThreadOnServer(conversation.threadId);
+  }
+
+  clearAllConversations(): void {
+    if (this.isLoading || !this.conversations.length) {
+      return;
+    }
+    const threadIds = this.conversations.map((item) => item.threadId);
+    this.conversations = [];
+    this.currentConversation = this.createConversation();
+    this.userQuestion = '';
+    this.apiError = null;
+    this.agentStatus = '';
+    this.persistConversations();
+    this.cdr.detectChanges();
+    for (const threadId of threadIds) {
+      void this.releaseThreadOnServer(threadId);
+    }
+  }
+
+  confirmClearAll(): void {
+    if (this.isLoading || !this.conversations.length) {
+      return;
+    }
+    if (!window.confirm(`确定清空全部 ${this.conversations.length} 条会话记录吗？此操作无法撤销。`)) {
+      return;
+    }
+    this.clearAllConversations();
+  }
+
   askSuggestion(question: string): void {
     this.userQuestion = question;
     this.sendChat();
@@ -422,11 +467,33 @@ export class StockChatComponent {
     ]
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, 30);
+    this.persistConversations();
+  }
+
+  private persistConversations(): void {
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(this.conversations));
       this.storageWarning = null;
     } catch {
       this.storageWarning = '浏览器无法保存会话记录；可继续对话，但刷新后记录可能丢失。';
+    }
+  }
+
+  /**
+   * Ask the server to forget the thread's checkpoints and offloaded history.
+   *
+   * The local copy is already gone at this point, so a failure here only
+   * leaves stale state on the server -- it must not surface as an error in
+   * the UI.
+   */
+  private async releaseThreadOnServer(threadId: string): Promise<void> {
+    try {
+      await fetch(`${this.apiBaseUrl}/agent/threads/${encodeURIComponent(threadId)}`, {
+        method: 'DELETE',
+      });
+    } catch {
+      // The conversation is removed locally regardless; server-side cleanup
+      // is best effort.
     }
   }
 }
