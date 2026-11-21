@@ -58,15 +58,24 @@
           你的分析记录会保存在这里
         </p>
       </nav>
-      <button
-        *ngIf="conversations.length"
-        class="clear-all-button"
-        type="button"
-        [disabled]="isLoading"
-        (click)="confirmClearAll()"
-      >
-        清空全部记录
-      </button>
+      <div *ngIf="conversations.length" class="sidebar-actions">
+        <button
+          class="export-all-button"
+          type="button"
+          [disabled]="isLoading || exportingAll"
+          (click)="exportAllConversations()"
+        >
+          {{ exportingAll ? '导出中…' : '导出全部' }}
+        </button>
+        <button
+          class="clear-all-button"
+          type="button"
+          [disabled]="isLoading"
+          (click)="confirmClearAll()"
+        >
+          清空全部记录
+        </button>
+      </div>
     </div>
 
     <div class="sidebar-bottom">

@@ -149,6 +149,81 @@ describe('StockChatComponent server history', () => {
     expect(stubs.every((item) => item.remote)).toBeTrue();
   });
 
+  it('exports every conversation in one download', async () => {
+    component.conversations = [
+      {
+        threadId: 't-1',
+        title: '会话一',
+        updatedAt: Date.now(),
+        messages: [],
+        remote: true,
+      },
+    ];
+    (window.fetch as jasmine.Spy).and.resolveTo(
+      new Response('# 全部会话导出\n\n## 会话一\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/markdown' },
+      }),
+    );
+    const createObjectURL = spyOn(URL, 'createObjectURL').and.returnValue('blob:all');
+    spyOn(URL, 'revokeObjectURL');
+    const clickSpy = spyOn(HTMLAnchorElement.prototype, 'click');
+
+    await component.exportAllConversations();
+    await fixture.whenStable();
+
+    expect(window.fetch).toHaveBeenCalledWith(
+      `${component.apiBaseUrl}/agent/threads/export?format=markdown`,
+    );
+    expect(clickSpy).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:all');
+    const blob = createObjectURL.calls.mostRecent().args[0] as Blob;
+    expect(await blob.text()).toContain('# 全部会话导出');
+  });
+
+  it('shows the export-all control only when there is history', async () => {
+    expect(fixture.nativeElement.querySelector('.export-all-button')).toBeNull();
+
+    localStorage.setItem(
+      'stock-assistant-conversations-v1',
+      JSON.stringify([
+        {
+          threadId: 't-1',
+          title: '会话一',
+          updatedAt: Date.now(),
+          messages: [],
+          remote: true,
+        },
+      ]),
+    );
+    const fresh = TestBed.createComponent(StockChatComponent);
+    fresh.detectChanges();
+    await fresh.whenStable();
+    fresh.detectChanges();
+
+    expect(fresh.nativeElement.querySelector('.export-all-button')).toBeTruthy();
+  });
+
+  it('reports a failed bulk export', async () => {
+    component.conversations = [
+      {
+        threadId: 't-1',
+        title: '会话一',
+        updatedAt: Date.now(),
+        messages: [],
+        remote: true,
+      },
+    ];
+    (window.fetch as jasmine.Spy).and.resolveTo(
+      jsonResponse({ detail: '导出服务不可用' }, 503),
+    );
+
+    await component.exportAllConversations();
+    await fixture.whenStable();
+
+    expect(component.apiError).toBe('导出服务不可用');
+  });
+
   it('does not delete server conversations when the local cache evicts them', () => {
     type SaveFn = (conversation: {
       threadId: string;

@@ -210,11 +210,16 @@ app-stock-chat {
   cursor: not-allowed;
 }
 
-.clear-all-button {
+.sidebar-actions {
+  display: flex;
+  gap: 14px;
   margin: 12px 9px 0;
+}
+
+.export-all-button,
+.clear-all-button {
   padding: 0;
   border: 0;
-  color: #8494a9;
   background: transparent;
   font: inherit;
   font-size: 11px;
@@ -223,12 +228,26 @@ app-stock-chat {
   cursor: pointer;
 }
 
+.export-all-button {
+  color: #9fb4cd;
+}
+
+.export-all-button:hover:not(:disabled) {
+  color: #d3e4fa;
+}
+
+.clear-all-button {
+  color: #8494a9;
+}
+
 .clear-all-button:hover:not(:disabled) {
   color: #e0a99f;
 }
 
+.export-all-button:disabled,
 .clear-all-button:disabled {
   cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .empty-history {

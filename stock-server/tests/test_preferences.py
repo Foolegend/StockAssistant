@@ -403,6 +403,56 @@ class ThreadExportTests(unittest.TestCase):
             get_agent_thread_messages("   ")
         self.assertEqual(error.exception.status_code, 400)
 
+    def test_bulk_markdown_export_contains_every_thread(self):
+        from src.api.chat import export_all_threads
+        from src.services.thread_history import append_messages
+
+        append_messages("export-t2", "user", "第二条会话")
+        append_messages("export-t2", "assistant", "好的")
+
+        response = export_all_threads(format="markdown")
+        body = response.body.decode("utf-8")
+
+        self.assertIn("# 全部会话导出", body)
+        self.assertIn("## 分析 TSLA", body)
+        self.assertIn("## 第二条会话", body)
+        self.assertIn("export-t1", body)
+        self.assertIn("export-t2", body)
+        self.assertIn("---", body)
+        self.assertIn("attachment", response.headers["Content-Disposition"])
+
+    def test_bulk_json_export_contains_every_thread(self):
+        import json
+
+        from src.api.chat import export_all_threads
+        from src.services.thread_history import append_messages
+
+        append_messages("export-t2", "user", "第二条会话")
+
+        response = export_all_threads(format="json")
+        payload = json.loads(response.body)
+
+        self.assertIn("exported_at", payload)
+        ids = {item["thread_id"] for item in payload["threads"]}
+        self.assertEqual(ids, {"export-t1", "export-t2"})
+        for item in payload["threads"]:
+            self.assertIn("messages", item)
+
+    def test_bulk_export_rejects_unknown_format(self):
+        from src.api.chat import export_all_threads
+
+        with self.assertRaises(HTTPException) as error:
+            export_all_threads(format="pdf")
+        self.assertEqual(error.exception.status_code, 400)
+
+    def test_bulk_export_404_when_there_is_nothing(self):
+        from src.api.chat import export_all_threads
+
+        with patch("src.api.chat.list_threads", return_value=[]):
+            with self.assertRaises(HTTPException) as error:
+                export_all_threads()
+        self.assertEqual(error.exception.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

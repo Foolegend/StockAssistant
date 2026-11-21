@@ -88,6 +88,8 @@ export class StockChatComponent {
   apiError: string | null = null;
   storageWarning: string | null = null;
 
+  exportingAll = false;
+
   preferences: UserPreference[] = [];
   preferencesOpen = false;
   preferencesLoading = false;
@@ -234,17 +236,37 @@ export class StockChatComponent {
       lines.push('');
     }
 
-    const blob = new Blob([lines.join('\n')], {
-      type: 'text/markdown;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${this.safeFileName(conversation.title)}.md`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    this.downloadText(
+      lines.join('\n'),
+      `${this.safeFileName(conversation.title)}.md`,
+    );
+  }
+
+  /** Export every stored conversation in one Markdown file. */
+  async exportAllConversations(): Promise<void> {
+    if (this.exportingAll || !this.conversations.length) {
+      return;
+    }
+    this.exportingAll = true;
+    this.apiError = null;
+    this.cdr.detectChanges();
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/agent/threads/export?format=markdown`,
+      );
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      const body = await response.text();
+      const stamp = new Date().toISOString().slice(0, 10);
+      this.downloadText(body, `conversations-${stamp}.md`);
+    } catch (error: unknown) {
+      this.apiError =
+        error instanceof Error ? error.message : '批量导出失败';
+    } finally {
+      this.exportingAll = false;
+      this.cdr.detectChanges();
+    }
   }
 
   async openPreferences(): Promise<void> {
@@ -893,5 +915,17 @@ export class StockChatComponent {
   private safeFileName(title: string): string {
     const cleaned = title.replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '');
     return cleaned || 'conversation';
+  }
+
+  private downloadText(content: string, fileName: string): void {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   }
 }

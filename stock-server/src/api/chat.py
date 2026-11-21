@@ -32,6 +32,7 @@ from src.services.component_router import select_components
 from src.services.extension_registry import ExtensionRegistry
 from src.services.hook_runner import HookExecutionError, HookRunner
 from src.services import retention
+from src.services.db import utc_now
 from src.services.thread_history import (
     append_messages,
     build_history_context,
@@ -652,6 +653,69 @@ def get_agent_thread_messages(thread_id: str):
         "message": "success",
         "data": {"thread_id": thread_id, "messages": messages},
     }
+
+
+@app.get("/agent/threads/export")
+def export_all_threads(format: str = "markdown", limit: int = 500):
+    """Export every stored conversation as one document."""
+    if format not in {"markdown", "json"}:
+        raise HTTPException(status_code=400, detail="不支持的导出格式")
+
+    safe_limit = max(1, min(limit, 1000))
+    threads = list_threads(limit=safe_limit, offset=0)
+    if not threads:
+        raise HTTPException(status_code=404, detail="没有可导出的会话记录")
+
+    exported = []
+    for thread in threads:
+        messages = load_messages(thread["thread_id"], limit=1000)
+        for message in messages:
+            if message["role"] == "assistant":
+                message["sources"] = _extract_sources(message["content"])
+        exported.append({**thread, "messages": messages})
+
+    if format == "json":
+        return JSONResponse(
+            content={"exported_at": utc_now(), "threads": exported},
+            headers={"Content-Disposition": 'attachment; filename="conversations.json"'},
+        )
+
+    lines: list[str] = [
+        "# 全部会话导出",
+        "",
+        f"- 导出时间：{utc_now()}",
+        f"- 会话数：{len(exported)}",
+        "",
+    ]
+    for item in exported:
+        lines.extend(
+            [
+                f"## {item['title']}",
+                "",
+                f"- 会话 ID：{item['thread_id']}",
+                f"- 最后更新：{item['updated_at']}",
+                f"- 消息数：{item['message_count']}",
+                "",
+            ]
+        )
+        for message in item["messages"]:
+            lines.append("### 我" if message["role"] == "user" else "### 研究助手")
+            lines.append("")
+            lines.append(message["content"] or "（无内容）")
+            sources = message.get("sources") or []
+            if sources:
+                lines.append("")
+                lines.append("参考来源：")
+                for source in sources:
+                    lines.append(f"- [{source['title']}]({source['url']})")
+            lines.append("")
+        lines.extend(["---", ""])
+
+    return Response(
+        content="\n".join(lines),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="conversations.md"'},
+    )
 
 
 @app.delete("/agent/threads/{thread_id}")
