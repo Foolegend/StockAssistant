@@ -18,77 +18,82 @@
     <div class="sidebar-section">
       <p class="sidebar-label">最近研究</p>
       <nav class="conversation-list" aria-label="最近研究">
-        <div
-          *ngFor="let conversation of conversations"
-          class="conversation-item"
-          [class.selected]="conversation.threadId === currentConversation.threadId"
-          [class.dragging]="draggedThreadId === conversation.threadId"
-          [class.drag-over]="dragOverThreadId === conversation.threadId"
-          draggable="true"
-          (dragstart)="onDragStart(conversation, $event)"
-          (dragover)="onDragOver($event, conversation)"
-          (dragleave)="onDragLeave(conversation)"
-          (drop)="onDrop($event, conversation)"
-          (dragend)="onDragEnd()"
-        >
-          <span class="conversation-drag" title="拖动调整顺序" aria-hidden="true">⠿</span>
-          <button
-            class="conversation-link"
-            type="button"
-            [disabled]="isLoading"
-            (click)="openConversation(conversation)"
-            [title]="conversation.title"
-          >
-            <span class="conversation-glyph" aria-hidden="true">◌</span>
-            <span class="conversation-title">{{ conversation.title }}</span>
-          </button>
-          <button
-            class="conversation-export"
-            type="button"
+        @for (conversation of conversations; track conversation) {
+          <div
+            class="conversation-item"
+            [class.selected]="conversation.threadId === currentConversation.threadId"
+            [class.dragging]="draggedThreadId === conversation.threadId"
+            [class.drag-over]="dragOverThreadId === conversation.threadId"
+            draggable="true"
+            (dragstart)="onDragStart(conversation, $event)"
+            (dragover)="onDragOver($event, conversation)"
+            (dragleave)="onDragLeave(conversation)"
+            (drop)="onDrop($event, conversation)"
+            (dragend)="onDragEnd()"
+            >
+            <span class="conversation-drag" title="拖动调整顺序" aria-hidden="true">⠿</span>
+            <button
+              class="conversation-link"
+              type="button"
+              [disabled]="isLoading"
+              (click)="openConversation(conversation)"
+              [title]="conversation.title"
+              >
+              <span class="conversation-glyph" aria-hidden="true">◌</span>
+              <span class="conversation-title">{{ conversation.title }}</span>
+            </button>
+            <button
+              class="conversation-export"
+              type="button"
             [disabled]="
               isLoading ||
               exportingConversationId === conversation.threadId ||
               (!conversation.messages.length && !conversation.remote)
             "
-            (click)="exportConversation(conversation)"
-            [attr.aria-label]="'导出会话：' + conversation.title"
-            title="导出为 Markdown"
-          >
-            <span aria-hidden="true">⤓</span>
+              (click)="exportConversation(conversation)"
+              [attr.aria-label]="'导出会话：' + conversation.title"
+              title="导出为 Markdown"
+              >
+              <span aria-hidden="true">⤓</span>
+            </button>
+            <button
+              class="conversation-delete"
+              type="button"
+              [disabled]="isLoading"
+              (click)="deleteConversation(conversation)"
+              [attr.aria-label]="'删除会话：' + conversation.title"
+              title="删除这条会话"
+              >
+              <span aria-hidden="true">✕</span>
+            </button>
+          </div>
+        }
+        @if (!conversations.length) {
+          <p class="empty-history">
+            你的分析记录会保存在这里
+          </p>
+        }
+      </nav>
+      @if (conversations.length) {
+        <div class="sidebar-actions">
+          <button
+            class="export-all-button"
+            type="button"
+            [disabled]="isLoading || exportingAll"
+            (click)="exportAllConversations()"
+            >
+            {{ exportingAll ? '导出中…' : '导出全部' }}
           </button>
           <button
-            class="conversation-delete"
+            class="clear-all-button"
             type="button"
             [disabled]="isLoading"
-            (click)="deleteConversation(conversation)"
-            [attr.aria-label]="'删除会话：' + conversation.title"
-            title="删除这条会话"
-          >
-            <span aria-hidden="true">✕</span>
+            (click)="confirmClearAll()"
+            >
+            清空全部记录
           </button>
         </div>
-        <p *ngIf="!conversations.length" class="empty-history">
-          你的分析记录会保存在这里
-        </p>
-      </nav>
-      <div *ngIf="conversations.length" class="sidebar-actions">
-        <button
-          class="export-all-button"
-          type="button"
-          [disabled]="isLoading || exportingAll"
-          (click)="exportAllConversations()"
-        >
-          {{ exportingAll ? '导出中…' : '导出全部' }}
-        </button>
-        <button
-          class="clear-all-button"
-          type="button"
-          [disabled]="isLoading"
-          (click)="confirmClearAll()"
-        >
-          清空全部记录
-        </button>
-      </div>
+      }
     </div>
 
     <div class="sidebar-bottom">
@@ -97,7 +102,7 @@
         type="button"
         (click)="openPreferences()"
         aria-label="管理长期偏好"
-      >
+        >
         <span aria-hidden="true">◎</span>
         <span>长期偏好</span>
       </button>
@@ -127,108 +132,128 @@
     <div class="content-layout">
       <section class="conversation-panel" aria-label="智能体对话">
         <div class="message-list" aria-live="polite">
-          <p *ngIf="conversationLoading" class="thinking-status">
-            <span class="status-pulse" aria-hidden="true"></span>
-            正在载入会话记录…
-          </p>
-          <section
-            *ngIf="!currentConversation.messages.length && !conversationLoading"
-            class="welcome"
-          >
-            <div class="welcome-emblem" aria-hidden="true">
-              <svg viewBox="0 0 52 52" fill="none">
-                <path d="M9 35.5 20 24l8 6.5L43 14" />
-                <path d="M33 14h10v10" />
-                <path d="M10 42h32" class="emblem-baseline" />
-              </svg>
-            </div>
-            <p class="welcome-kicker">StockAssistant 研究助手</p>
-            <h1>把市场问题，聊清楚。</h1>
-            <p class="welcome-copy">
-              从一家公司、一条新闻或一个投资概念开始。<br />
-              我会整理思路，并尽可能展示回答依据。
+          @if (conversationLoading) {
+            <p class="thinking-status">
+              <span class="status-pulse" aria-hidden="true"></span>
+              正在载入会话记录…
             </p>
-
-            <div class="suggestion-list" aria-label="试试这样提问">
-              <button
-                *ngFor="let suggestion of suggestions"
-                type="button"
-                (click)="askSuggestion(suggestion)"
-                [disabled]="isLoading"
+          }
+          @if (!currentConversation.messages.length && !conversationLoading) {
+            <section
+              class="welcome"
               >
-                <span>{{ suggestion }}</span>
-                <span class="suggestion-plus" aria-hidden="true">＋</span>
-              </button>
-            </div>
-          </section>
+              <div class="welcome-emblem" aria-hidden="true">
+                <svg viewBox="0 0 52 52" fill="none">
+                  <path d="M9 35.5 20 24l8 6.5L43 14" />
+                  <path d="M33 14h10v10" />
+                  <path d="M10 42h32" class="emblem-baseline" />
+                </svg>
+              </div>
+              <p class="welcome-kicker">StockAssistant 研究助手</p>
+              <h1>把市场问题，聊清楚。</h1>
+              <p class="welcome-copy">
+                从一家公司、一条新闻或一个投资概念开始。<br />
+                我会整理思路，并尽可能展示回答依据。
+              </p>
+              <div class="suggestion-list" aria-label="试试这样提问">
+                @for (suggestion of suggestions; track suggestion) {
+                  <button
+                    type="button"
+                    (click)="askSuggestion(suggestion)"
+                    [disabled]="isLoading"
+                    >
+                    <span>{{ suggestion }}</span>
+                    <span class="suggestion-plus" aria-hidden="true">＋</span>
+                  </button>
+                }
+              </div>
+            </section>
+          }
 
-          <article
-            *ngFor="let message of currentConversation.messages; trackBy: trackById"
-            class="message-row"
-            [class.user-row]="message.role === 'user'"
-            [class.assistant-row]="message.role === 'assistant'"
-          >
-            <div *ngIf="message.role === 'assistant'" class="assistant-avatar" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="m4 16 5-5 3 2.5L20 6" />
-                <path d="M15 6h5v5" />
-              </svg>
-            </div>
-
-            <div class="message-body">
-              <div class="message-meta">
-                <span>{{ message.role === 'user' ? '你' : '研究助手' }}</span>
-                <button
-                  *ngIf="message.role === 'assistant' && message.content"
-                  type="button"
-                  class="copy-button"
-                  (click)="copyAnswer(message)"
-                  [attr.aria-label]="copyStates[message.id] === 'copied' ? '已复制回答' : '复制回答'"
-                >
-                  {{
-                    copyStates[message.id] === 'copied'
+          @for (message of currentConversation.messages; track trackById($index, message)) {
+            <article
+              class="message-row"
+              [class.user-row]="message.role === 'user'"
+              [class.assistant-row]="message.role === 'assistant'"
+              >
+              @if (message.role === 'assistant') {
+                <div class="assistant-avatar" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <path d="m4 16 5-5 3 2.5L20 6" />
+                    <path d="M15 6h5v5" />
+                  </svg>
+                </div>
+              }
+              <div class="message-body">
+                <div class="message-meta">
+                  <span>{{ message.role === 'user' ? '你' : '研究助手' }}</span>
+                  @if (message.role === 'assistant' && message.content) {
+                    <button
+                      type="button"
+                      class="copy-button"
+                      (click)="copyAnswer(message)"
+                      [attr.aria-label]="copyStates[message.id] === 'copied' ? '已复制回答' : '复制回答'"
+                      >
+                      {{
+                      copyStates[message.id] === 'copied'
                       ? '已复制'
                       : copyStates[message.id] === 'failed'
-                        ? '复制失败'
-                        : '复制'
-                  }}
-                </button>
+                      ? '复制失败'
+                      : '复制'
+                      }}
+                    </button>
+                  }
+                </div>
+                @if (message.role === 'user') {
+                  <div class="user-message">
+                    {{ message.content }}
+                  </div>
+                }
+                @if (message.role === 'assistant') {
+                  <div class="assistant-message">
+                    @if (message.content) {
+                      <div
+                        class="answer-content markdown-body"
+                        [innerHTML]="message.content | markdown"
+                      ></div>
+                    }
+                    @if (message.status && !message.content && isLoading) {
+                      <p class="thinking-status">
+                        <span class="status-pulse" aria-hidden="true"></span>
+                        {{ message.status }}
+                      </p>
+                    }
+                    @if (message.cancelled) {
+                      <p class="cancelled-message">
+                        {{ message.status }}
+                      </p>
+                    }
+                    @if (message.error) {
+                      <p class="message-error">
+                        {{ message.error }}
+                      </p>
+                    }
+                    @if (message.content && message.sources?.length === 0) {
+                      <p
+                        class="no-sources-note"
+                        >
+                        此回答未附可验证的外部来源，请核对原始数据。
+                      </p>
+                    }
+                  </div>
+                }
               </div>
-
-              <div *ngIf="message.role === 'user'" class="user-message">
-                {{ message.content }}
-              </div>
-
-              <div *ngIf="message.role === 'assistant'" class="assistant-message">
-                <div
-                  *ngIf="message.content"
-                  class="answer-content markdown-body"
-                  [innerHTML]="message.content | markdown"
-                ></div>
-                <p *ngIf="message.status && !message.content && isLoading" class="thinking-status">
-                  <span class="status-pulse" aria-hidden="true"></span>
-                  {{ message.status }}
-                </p>
-                <p *ngIf="message.cancelled" class="cancelled-message">
-                  {{ message.status }}
-                </p>
-                <p *ngIf="message.error" class="message-error">
-                  {{ message.error }}
-                </p>
-                <p
-                  *ngIf="message.content && message.sources?.length === 0"
-                  class="no-sources-note"
-                >
-                  此回答未附可验证的外部来源，请核对原始数据。
-                </p>
-              </div>
-            </div>
-          </article>
+            </article>
+          }
         </div>
 
         <div class="composer-area">
-          <p *ngIf="apiError" class="request-warning" role="alert">{{ apiError }}</p>
-          <p *ngIf="storageWarning" class="storage-warning" role="status">{{ storageWarning }}</p>
+          @if (apiError) {
+            <p class="request-warning" role="alert">{{ apiError }}</p>
+          }
+          @if (storageWarning) {
+            <p class="storage-warning" role="status">{{ storageWarning }}</p>
+          }
           <div class="composer">
             <textarea
               [(ngModel)]="userQuestion"
@@ -240,26 +265,28 @@
             ></textarea>
             <div class="composer-footer">
               <span>Enter 发送 · Shift + Enter 换行</span>
-              <button
-                *ngIf="!isLoading"
-                class="send-button"
-                type="button"
-                [disabled]="!userQuestion.trim()"
-                (click)="sendChat()"
-              >
-                <span>发送问题</span>
-                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path d="M4 10h11M10 5l5 5-5 5" />
-                </svg>
-              </button>
-              <button
-                *ngIf="isLoading"
-                class="stop-button"
-                type="button"
-                (click)="stopChat()"
-              >
-                停止分析
-              </button>
+              @if (!isLoading) {
+                <button
+                  class="send-button"
+                  type="button"
+                  [disabled]="!userQuestion.trim()"
+                  (click)="sendChat()"
+                  >
+                  <span>发送问题</span>
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <path d="M4 10h11M10 5l5 5-5 5" />
+                  </svg>
+                </button>
+              }
+              @if (isLoading) {
+                <button
+                  class="stop-button"
+                  type="button"
+                  (click)="stopChat()"
+                  >
+                  停止分析
+                </button>
+              }
             </div>
           </div>
           <p class="disclaimer">
@@ -279,26 +306,34 @@
 
         <section class="evidence-section">
           <h3>执行过程</h3>
-          <div *ngIf="isLoading" class="activity-status">
-            <span class="status-pulse" aria-hidden="true"></span>
-            {{ agentStatus || '正在准备分析' }}
-          </div>
-          <ul *ngIf="currentActivities.length" class="activity-list">
-            <li *ngFor="let activity of currentActivities; trackBy: trackById">
-              <span
-                class="activity-indicator"
-                [class.activity-complete]="activity.status === 'complete'"
-                aria-hidden="true"
-              ></span>
-              <span>{{ activity.tool }}</span>
-              <span class="activity-state">
-                {{ activity.status === 'complete' ? '已完成' : '进行中' }}
-              </span>
-            </li>
-          </ul>
-          <p *ngIf="!isLoading && !currentActivities.length" class="evidence-empty">
-            智能体调用工具后，执行步骤会显示在这里。
-          </p>
+          @if (isLoading) {
+            <div class="activity-status">
+              <span class="status-pulse" aria-hidden="true"></span>
+              {{ agentStatus || '正在准备分析' }}
+            </div>
+          }
+          @if (currentActivities.length) {
+            <ul class="activity-list">
+              @for (activity of currentActivities; track trackById($index, activity)) {
+                <li>
+                  <span
+                    class="activity-indicator"
+                    [class.activity-complete]="activity.status === 'complete'"
+                    aria-hidden="true"
+                  ></span>
+                  <span>{{ activity.tool }}</span>
+                  <span class="activity-state">
+                    {{ activity.status === 'complete' ? '已完成' : '进行中' }}
+                  </span>
+                </li>
+              }
+            </ul>
+          }
+          @if (!isLoading && !currentActivities.length) {
+            <p class="evidence-empty">
+              智能体调用工具后，执行步骤会显示在这里。
+            </p>
+          }
         </section>
 
         <section class="evidence-section source-section">
@@ -306,18 +341,24 @@
             <h3>引用来源</h3>
             <span>{{ currentSources.length }}</span>
           </div>
-          <ul *ngIf="currentSources.length" class="source-list">
-            <li *ngFor="let source of currentSources">
-              <a [href]="source.url" target="_blank" rel="noopener noreferrer">
-                <span class="source-icon" aria-hidden="true">↗</span>
-                <span>{{ source.title || source.url }}</span>
-              </a>
-              <small>{{ source.url }}</small>
-            </li>
-          </ul>
-          <p *ngIf="!currentSources.length" class="evidence-empty">
-            回答中的网页引用会列在这里。没有来源时，请把结论视为未核实信息。
-          </p>
+          @if (currentSources.length) {
+            <ul class="source-list">
+              @for (source of currentSources; track source) {
+                <li>
+                  <a [href]="source.url" target="_blank" rel="noopener noreferrer">
+                    <span class="source-icon" aria-hidden="true">↗</span>
+                    <span>{{ source.title || source.url }}</span>
+                  </a>
+                  <small>{{ source.url }}</small>
+                </li>
+              }
+            </ul>
+          }
+          @if (!currentSources.length) {
+            <p class="evidence-empty">
+              回答中的网页引用会列在这里。没有来源时，请把结论视为未核实信息。
+            </p>
+          }
         </section>
 
         <div class="evidence-footnote">
@@ -330,108 +371,112 @@
     </div>
   </main>
 
-  <div
-    *ngIf="preferencesOpen"
-    class="modal-backdrop"
-    role="dialog"
-    aria-modal="true"
-    aria-label="长期偏好"
-    (click)="closePreferences()"
-  >
-    <div class="modal" (click)="$event.stopPropagation()">
-      <header class="modal-header">
-        <div>
-          <h2>长期偏好</h2>
-          <p>跨会话生效，会注入到每次对话的上下文中。可手动添加，也会从对话中自动提取。</p>
-        </div>
-        <button
-          class="modal-close"
-          type="button"
-          (click)="closePreferences()"
-          aria-label="关闭"
-        >
-          ✕
-        </button>
-      </header>
-
-      <div *ngIf="preferencesError" class="modal-error" role="alert">
-        {{ preferencesError }}
-      </div>
-
-      <div class="preference-form">
-        <select
-          class="preference-category"
-          [(ngModel)]="preferenceCategory"
-          aria-label="偏好分类"
-        >
-          <option *ngFor="let category of preferenceCategories" [ngValue]="category.id">
-            {{ category.label }}
-          </option>
-        </select>
-        <input
-          class="preference-input"
-          type="text"
-          [(ngModel)]="preferenceDraft"
-          (keydown.enter)="addPreference()"
-          placeholder="例如：只关注 A 股，偏好短线，不追高"
-          aria-label="新增偏好"
-          maxlength="200"
-        />
-        <button
-          class="preference-add"
-          type="button"
-          [disabled]="!preferenceDraft.trim() || preferencesLoading"
-          (click)="addPreference()"
-        >
-          添加
-        </button>
-      </div>
-
-      <p *ngIf="preferencesLoading" class="modal-hint">处理中…</p>
-
-      <ul *ngIf="preferences.length" class="preference-list">
-        <li
-          *ngFor="let preference of preferences"
-          class="preference-item"
-          [class.disabled]="!preference.enabled"
-        >
-          <span class="preference-chip">{{ categoryLabel(preference.category) }}</span>
-
-          <ng-container *ngIf="editingPreferenceId !== preference.id; else editing">
-            <span class="preference-text">{{ preference.content }}</span>
-            <span class="preference-source" [title]="preference.source === 'auto' ? '从对话中自动提取' : '手动添加'">
-              {{ preference.source === 'auto' ? '自动' : '手动' }}
-            </span>
-            <span class="preference-actions">
-              <button type="button" (click)="startEditingPreference(preference)">编辑</button>
-              <button type="button" (click)="togglePreference(preference)">
-                {{ preference.enabled ? '停用' : '启用' }}
-              </button>
-              <button type="button" class="danger" (click)="deletePreference(preference)">删除</button>
-            </span>
-          </ng-container>
-
-          <ng-template #editing>
-            <input
-              class="preference-edit-input"
-              type="text"
-              [(ngModel)]="editingContent"
-              (keydown.enter)="savePreferenceContent(preference)"
-              (keydown.escape)="cancelEditingPreference()"
-              aria-label="编辑偏好"
-              maxlength="200"
+  @if (preferencesOpen) {
+    <div
+      class="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="长期偏好"
+      (click)="closePreferences()"
+      >
+      <div class="modal" (click)="$event.stopPropagation()">
+        <header class="modal-header">
+          <div>
+            <h2>长期偏好</h2>
+            <p>跨会话生效，会注入到每次对话的上下文中。可手动添加，也会从对话中自动提取。</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            (click)="closePreferences()"
+            aria-label="关闭"
+            >
+            ✕
+          </button>
+        </header>
+        @if (preferencesError) {
+          <div class="modal-error" role="alert">
+            {{ preferencesError }}
+          </div>
+        }
+        <div class="preference-form">
+          <select
+            class="preference-category"
+            [(ngModel)]="preferenceCategory"
+            aria-label="偏好分类"
+            >
+            @for (category of preferenceCategories; track category) {
+              <option [ngValue]="category.id">
+                {{ category.label }}
+              </option>
+            }
+          </select>
+          <input
+            class="preference-input"
+            type="text"
+            [(ngModel)]="preferenceDraft"
+            (keydown.enter)="addPreference()"
+            placeholder="例如：只关注 A 股，偏好短线，不追高"
+            aria-label="新增偏好"
+            maxlength="200"
             />
-            <span class="preference-actions">
-              <button type="button" (click)="savePreferenceContent(preference)">保存</button>
-              <button type="button" (click)="cancelEditingPreference()">取消</button>
-            </span>
-          </ng-template>
-        </li>
-      </ul>
-
-      <p *ngIf="!preferences.length && !preferencesLoading" class="modal-empty">
-        还没有记录长期偏好。你可以在对话中直接说“记住我只做 A 股”，或者在上方手动添加。
-      </p>
+            <button
+              class="preference-add"
+              type="button"
+              [disabled]="!preferenceDraft.trim() || preferencesLoading"
+              (click)="addPreference()"
+              >
+              添加
+            </button>
+          </div>
+          @if (preferencesLoading) {
+            <p class="modal-hint">处理中…</p>
+          }
+          @if (preferences.length) {
+            <ul class="preference-list">
+              @for (preference of preferences; track preference) {
+                <li
+                  class="preference-item"
+                  [class.disabled]="!preference.enabled"
+                  >
+                  <span class="preference-chip">{{ categoryLabel(preference.category) }}</span>
+                  @if (editingPreferenceId !== preference.id) {
+                    <span class="preference-text">{{ preference.content }}</span>
+                    <span class="preference-source" [title]="preference.source === 'auto' ? '从对话中自动提取' : '手动添加'">
+                      {{ preference.source === 'auto' ? '自动' : '手动' }}
+                    </span>
+                    <span class="preference-actions">
+                      <button type="button" (click)="startEditingPreference(preference)">编辑</button>
+                      <button type="button" (click)="togglePreference(preference)">
+                        {{ preference.enabled ? '停用' : '启用' }}
+                      </button>
+                      <button type="button" class="danger" (click)="deletePreference(preference)">删除</button>
+                    </span>
+                  } @else {
+                    <input
+                      class="preference-edit-input"
+                      type="text"
+                      [(ngModel)]="editingContent"
+                      (keydown.enter)="savePreferenceContent(preference)"
+                      (keydown.escape)="cancelEditingPreference()"
+                      aria-label="编辑偏好"
+                      maxlength="200"
+                      />
+                      <span class="preference-actions">
+                        <button type="button" (click)="savePreferenceContent(preference)">保存</button>
+                        <button type="button" (click)="cancelEditingPreference()">取消</button>
+                      </span>
+                    }
+                  </li>
+                }
+              </ul>
+            }
+            @if (!preferences.length && !preferencesLoading) {
+              <p class="modal-empty">
+                还没有记录长期偏好。你可以在对话中直接说“记住我只做 A 股”，或者在上方手动添加。
+              </p>
+            }
+          </div>
+        </div>
+      }
     </div>
-  </div>
-</div>

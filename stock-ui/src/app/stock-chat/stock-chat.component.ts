@@ -1,5 +1,5 @@
-import { ChangeDetectorRef, Component } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { ChangeDetectorRef, Component, ChangeDetectionStrategy } from '@angular/core';
+
 import { FormsModule } from '@angular/forms';
 
 import { MarkdownPipe } from '../shared/markdown.pipe';
@@ -60,7 +60,8 @@ interface PreferenceCategory {
 
 @Component({
   selector: 'app-stock-chat',
-  imports: [CommonModule, FormsModule, MarkdownPipe],
+  imports: [FormsModule, MarkdownPipe],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './stock-chat.component.html',
 })
 export class StockChatComponent {
