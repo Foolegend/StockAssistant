@@ -227,30 +227,52 @@ describe('StockChatComponent export', () => {
     fixture.detectChanges();
   });
 
-  it('downloads the conversation as markdown', async () => {
-    const createObjectURL = spyOn(URL, 'createObjectURL').and.returnValue('blob:test');
+  const conversation = {
+    threadId: 'thread-1',
+    title: '测试 / 会话',
+    updatedAt: 0,
+    messages: [
+      { id: '1', role: 'user' as const, content: '分析 TSLA' },
+      {
+        id: '2',
+        role: 'assistant' as const,
+        content: '## 结论\n\n看好。',
+        sources: [{ title: '公告', url: 'https://example.com/a' }],
+      },
+    ],
+  };
+
+  it('prefers the server record when it is available', async () => {
+    const createObjectURL = spyOn(URL, 'createObjectURL').and.returnValue('blob:server');
     spyOn(URL, 'revokeObjectURL');
     const clickSpy = spyOn(HTMLAnchorElement.prototype, 'click');
+    (window.fetch as jasmine.Spy).and.resolveTo(
+      new Response('# 服务端导出\n\n## 我\n\n来自服务端', {
+        status: 200,
+        headers: { 'Content-Type': 'text/markdown' },
+      }),
+    );
 
-    const conversation = {
-      threadId: 'thread-1',
-      title: '测试 / 会话',
-      updatedAt: 0,
-      messages: [
-        { id: '1', role: 'user' as const, content: '分析 TSLA' },
-        {
-          id: '2',
-          role: 'assistant' as const,
-          content: '## 结论\n\n看好。',
-          sources: [{ title: '公告', url: 'https://example.com/a' }],
-        },
-      ],
-    };
+    await component.exportConversation(conversation);
 
-    component.exportConversation(conversation);
-
+    expect(window.fetch).toHaveBeenCalledWith(
+      `${component.apiBaseUrl}/agent/threads/thread-1/export?format=markdown`,
+    );
     expect(clickSpy).toHaveBeenCalled();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:server');
+    const blob = createObjectURL.calls.mostRecent().args[0] as Blob;
+    expect(await blob.text()).toContain('服务端导出');
+  });
+
+  it('falls back to the local record when the server has none', async () => {
+    const createObjectURL = spyOn(URL, 'createObjectURL').and.returnValue('blob:local');
+    spyOn(URL, 'revokeObjectURL');
+    spyOn(HTMLAnchorElement.prototype, 'click');
+    (window.fetch as jasmine.Spy).and.resolveTo(
+      jsonResponse({ detail: '没有记录' }, 404),
+    );
+
+    await component.exportConversation(conversation);
 
     const blob = createObjectURL.calls.mostRecent().args[0] as Blob;
     const text = await blob.text();
@@ -261,14 +283,56 @@ describe('StockChatComponent export', () => {
     expect(text).toContain('[公告](https://example.com/a)');
   });
 
-  it('does nothing for an empty conversation', () => {
+  it('exports a server-only conversation without opening it', async () => {
+    const createObjectURL = spyOn(URL, 'createObjectURL').and.returnValue('blob:stub');
+    spyOn(URL, 'revokeObjectURL');
+    spyOn(HTMLAnchorElement.prototype, 'click');
+    (window.fetch as jasmine.Spy).and.resolveTo(
+      new Response('# 服务端导出', { status: 200 }),
+    );
+
+    await component.exportConversation({
+      threadId: 'server-only',
+      title: '服务端会话',
+      updatedAt: 0,
+      messages: [],
+      remote: true,
+    });
+
+    expect(createObjectURL).toHaveBeenCalled();
+  });
+
+  it('reports an error when neither side has a record', async () => {
     const createObjectURL = spyOn(URL, 'createObjectURL');
-    component.exportConversation({
+    (window.fetch as jasmine.Spy).and.resolveTo(
+      jsonResponse({ detail: '该会话没有可导出的记录' }, 404),
+    );
+
+    await component.exportConversation({
+      threadId: 'gone',
+      title: '已过期',
+      updatedAt: 0,
+      messages: [],
+      remote: true,
+    });
+
+    expect(component.apiError).toBe('该会话没有可导出的记录');
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an empty local conversation', async () => {
+    const createObjectURL = spyOn(URL, 'createObjectURL');
+    const fetchSpy = window.fetch as jasmine.Spy;
+    fetchSpy.calls.reset();
+
+    await component.exportConversation({
       threadId: 'thread-2',
       title: '空会话',
       updatedAt: 0,
       messages: [],
     });
+
     expect(createObjectURL).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

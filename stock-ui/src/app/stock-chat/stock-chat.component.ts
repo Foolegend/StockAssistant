@@ -89,6 +89,7 @@ export class StockChatComponent {
   storageWarning: string | null = null;
 
   exportingAll = false;
+  exportingConversationId: string | null = null;
 
   preferences: UserPreference[] = [];
   preferencesOpen = false;
@@ -202,10 +203,54 @@ export class StockChatComponent {
     this.clearAllConversations();
   }
 
-  exportConversation(conversation: ChatConversation): void {
-    if (!conversation.messages.length) {
+  async exportConversation(conversation: ChatConversation): Promise<void> {
+    const hasLocal = conversation.messages.length > 0;
+    if (
+      this.isLoading ||
+      this.exportingConversationId ||
+      (!hasLocal && !conversation.remote)
+    ) {
       return;
     }
+
+    this.exportingConversationId = conversation.threadId;
+    this.apiError = null;
+    this.cdr.detectChanges();
+    try {
+      // The server has the authoritative record; fall back to the local copy
+      // when it is unavailable (offline, expired, or never persisted).
+      const response = await fetch(
+        `${this.apiBaseUrl}/agent/threads/${encodeURIComponent(conversation.threadId)}/export?format=markdown`,
+      );
+      if (response.ok) {
+        const body = await response.text();
+        this.downloadText(
+          body,
+          `${this.safeFileName(conversation.title)}.md`,
+        );
+        return;
+      }
+      if (!hasLocal) {
+        this.apiError =
+          response.status === 404
+            ? '该会话没有可导出的记录'
+            : await this.readError(response);
+        return;
+      }
+    } catch {
+      if (!hasLocal) {
+        this.apiError = '导出失败，请稍后重试';
+        return;
+      }
+    } finally {
+      this.exportingConversationId = null;
+      this.cdr.detectChanges();
+    }
+
+    this.exportLocalConversation(conversation);
+  }
+
+  private exportLocalConversation(conversation: ChatConversation): void {
     const lines: string[] = [
       `# ${conversation.title}`,
       '',

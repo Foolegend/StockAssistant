@@ -36,7 +36,11 @@
           <button
             class="conversation-export"
             type="button"
-            [disabled]="isLoading || !conversation.messages.length"
+            [disabled]="
+              isLoading ||
+              exportingConversationId === conversation.threadId ||
+              (!conversation.messages.length && !conversation.remote)
+            "
             (click)="exportConversation(conversation)"
             [attr.aria-label]="'导出会话：' + conversation.title"
             title="导出为 Markdown"
