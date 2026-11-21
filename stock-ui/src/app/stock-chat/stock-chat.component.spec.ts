@@ -38,14 +38,26 @@ describe('StockChatComponent', () => {
   it('streams real tool activity, renders the answer, and saves local history', async () => {
     const stream = [
       { event: 'status', data: { stage: 'routing', message: '正在判断分析能力' } },
-      { event: 'tool_start', data: { tool_id: 'tool-1', tool: '查询行情' } },
-      { event: 'tool_end', data: { tool_id: 'tool-1', tool: '查询行情' } },
+      {
+        event: 'tool_start',
+        data: { tool_id: 'tool-1', tool: '查询行情', args: '{"symbol": "TSLA"}' },
+      },
+      {
+        event: 'tool_end',
+        data: {
+          tool_id: 'tool-1',
+          tool: '查询行情',
+          output: '{"price": 100}',
+          error: false,
+          duration_ms: 12,
+        },
+      },
       {
         event: 'complete',
         data: {
           answer: '## 分析摘要\n\n参考 [公司公告](https://example.com/report)。',
           sources: [{ title: '公司公告', url: 'https://example.com/report' }],
-          agent_id: 'stock-analyst',
+          agent_id: 'investment-analyst',
           model: 'test-model',
         },
       },
@@ -70,7 +82,17 @@ describe('StockChatComponent', () => {
       id: 'tool-1',
       tool: '查询行情',
       status: 'complete',
+      args: '{"symbol": "TSLA"}',
+      output: '{"price": 100}',
+      durationMs: 12,
     });
+    const detailBlocks: HTMLElement[] = Array.from(
+      fixture.nativeElement.querySelectorAll('.activity-detail pre'),
+    );
+    expect(detailBlocks.map((block) => block.textContent)).toEqual([
+      '{"symbol": "TSLA"}',
+      '{"price": 100}',
+    ]);
     expect(component.currentSources[0].url).toBe('https://example.com/report');
     expect(fixture.nativeElement.querySelector('.answer-content h2')?.textContent).toContain(
       '分析摘要',

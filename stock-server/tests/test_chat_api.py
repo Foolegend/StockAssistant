@@ -25,7 +25,7 @@ def _rate_limit_error() -> RateLimitError:
 class ChatApiRateLimitTests(unittest.TestCase):
     def test_rate_limit_returns_429_with_friendly_message(self):
         selection = ComponentSelection(
-            agent_id="stock-analyst",
+            agent_id="investment-analyst",
             skill_ids=["stock-analysis"],
         )
         resolved = ResolvedComponents(

@@ -674,9 +674,9 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertIn("stock-analysis", [skill["id"] for skill in catalog["skills"]])
         self.assertEqual(
             [agent["id"] for agent in catalog["agents"]],
-            ["stock-analyst"],
+            ["investment-analyst"],
         )
-        self.assertEqual(list(registry.mcp_servers), ["sequential-thinking"])
+        self.assertEqual(list(registry.mcp_servers), ["quant-tools"])
         self.assertEqual(len(registry.hooks), 1)
         stock_data_hook = next(iter(registry.hooks.values()))
         self.assertEqual(stock_data_hook["event"], "PostToolUse")
@@ -694,8 +694,8 @@ class ExtensionRegistryTests(unittest.TestCase):
             {"tool": "Bash", "tool_input": {"command": "python some_other_script.py"}},
         ))
 
-    def test_stock_analyst_workspace_uses_project_root(self):
-        agent = extension_registry.agents["stock-analyst"]
+    def test_investment_analyst_workspace_uses_project_root(self):
+        agent = extension_registry.agents["investment-analyst"]
 
         runtime = extension_registry.agent_runtime_config(agent)
 
@@ -720,13 +720,27 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(response["code"], 0)
         self.assertEqual(
             [agent["name"] for agent in response["data"]["agents"]],
-            ["Stock Analyst"],
+            ["Investment Analyst"],
+        )
+        self.assertEqual(
+            [skill["id"] for skill in response["data"]["agents"][0]["skills"]],
+            [
+                "stock-analysis",
+                "market-cycle-assessment",
+                "enterprise-statement-analysis",
+                "doc-handler",
+                "docx",
+                "docx-cn",
+                "pdf",
+                "pptx",
+                "xlsx",
+            ],
         )
 
     def test_api_routes_question_to_registered_components(self):
         request = AgentChatRequest(question="分析 TSLA")
         selection = ComponentSelection(
-            agent_id="stock-analyst",
+            agent_id="investment-analyst",
             skill_ids=["stock-analysis"],
             mcp_server_ids=[],
         )
@@ -746,7 +760,7 @@ class ExtensionRegistryTests(unittest.TestCase):
             response = agent_chat(request)
 
         self.assertEqual(response["data"]["answer"], "分析完成")
-        self.assertEqual(response["data"]["agent_id"], "stock-analyst")
+        self.assertEqual(response["data"]["agent_id"], "investment-analyst")
         self.assertNotIn("command_id", response["data"])
         self.assertEqual(
             response["data"]["skills"],
@@ -859,7 +873,7 @@ class ExtensionRegistryTests(unittest.TestCase):
     def test_api_runs_error_hook_when_agent_fails(self):
         request = AgentChatRequest(question="hello, help me debug a failing endpoint")
         selection = ComponentSelection(
-            agent_id="stock-analyst",
+            agent_id="investment-analyst",
             skill_ids=[],
             mcp_server_ids=[],
         )
@@ -899,7 +913,7 @@ class ExtensionRegistryTests(unittest.TestCase):
 
     def test_chat_request_rejects_user_supplied_component_ids(self):
         with self.assertRaises(ValidationError):
-            AgentChatRequest(question="hello", agent_id="stock-analyst")
+            AgentChatRequest(question="hello", agent_id="investment-analyst")
 
     def test_chat_requests_get_unique_thread_ids_by_default(self):
         first = AgentChatRequest(question="first")

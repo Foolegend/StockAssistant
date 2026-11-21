@@ -306,7 +306,11 @@ class AgentStreamingTests(unittest.TestCase):
             ["tool_start", "tool_end"],
         )
         self.assertEqual(events[0][1]["tool"], "quote")
+        self.assertEqual(events[0][1]["args"], "")
         self.assertEqual(events[1][1]["tool_id"], "call-1")
+        self.assertEqual(events[1][1]["output"], "latest quote")
+        self.assertFalse(events[1][1]["error"])
+        self.assertIsInstance(events[1][1]["duration_ms"], int)
         self.assertEqual(agent.config["configurable"]["thread_id"], "stream-thread")
         self.assertEqual(agent.kwargs["stream_mode"], "updates")
 

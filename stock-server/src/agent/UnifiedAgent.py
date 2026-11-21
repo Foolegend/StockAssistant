@@ -442,6 +442,50 @@ def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: st
     return str(last_message)
 
 
+MAX_TOOL_DETAIL_CHARS = 4000
+
+
+def _truncate_tool_detail(text: str) -> str:
+    if len(text) <= MAX_TOOL_DETAIL_CHARS:
+        return text
+    return text[:MAX_TOOL_DETAIL_CHARS] + "\n…（内容过长，已截断）"
+
+
+def _format_tool_args(args: object) -> str:
+    """Render tool arguments for the UI evidence panel."""
+    if not args:
+        return ""
+    try:
+        text = json.dumps(args, ensure_ascii=False, indent=2, default=str)
+    except (TypeError, ValueError):
+        text = str(args)
+    return _truncate_tool_detail(text)
+
+
+def _format_tool_output(content: object) -> str:
+    """Flatten a ToolMessage payload (text or content blocks) for display."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            else:
+                try:
+                    parts.append(json.dumps(item, ensure_ascii=False, default=str))
+                except (TypeError, ValueError):
+                    parts.append(str(item))
+        text = "\n".join(parts)
+    else:
+        text = str(content)
+    return _truncate_tool_detail(text.strip())
+
+
 def stream_agent(
     question: str,
     config: Optional[AgentConfig] = None,
@@ -458,6 +502,7 @@ def stream_agent(
     )
     final_answer = ""
     tool_names = {}
+    tool_started_at = {}
     started = time.perf_counter()
 
     for update in agent.stream(
@@ -483,14 +528,20 @@ def stream_agent(
                     tool_name = tool_call.get("name", "工具")
                     if tool_id:
                         tool_names[tool_id] = tool_name
+                        tool_started_at[tool_id] = time.perf_counter()
                     if on_event is not None:
                         on_event(
                             "tool_start",
-                            {"tool_id": tool_id, "tool": tool_name},
+                            {
+                                "tool_id": tool_id,
+                                "tool": tool_name,
+                                "args": _format_tool_args(tool_call.get("args")),
+                            },
                         )
 
                 if getattr(message, "type", None) == "tool":
                     tool_id = getattr(message, "tool_call_id", None)
+                    started_at = tool_started_at.pop(tool_id, None)
                     if on_event is not None:
                         on_event(
                             "tool_end",
@@ -499,6 +550,15 @@ def stream_agent(
                                 "tool": tool_names.get(
                                     tool_id,
                                     getattr(message, "name", "工具"),
+                                ),
+                                "output": _format_tool_output(
+                                    getattr(message, "content", None)
+                                ),
+                                "error": getattr(message, "status", None) == "error",
+                                "duration_ms": (
+                                    int((time.perf_counter() - started_at) * 1000)
+                                    if started_at is not None
+                                    else None
                                 ),
                             },
                         )

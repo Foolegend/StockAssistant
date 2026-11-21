@@ -13,6 +13,10 @@ interface AgentActivity {
   id: string;
   tool: string;
   status: 'running' | 'complete';
+  args?: string;
+  output?: string;
+  error?: boolean;
+  durationMs?: number;
 }
 
 interface ChatMessage {
@@ -674,13 +678,30 @@ export class StockChatComponent {
       const toolId = typeof data['tool_id'] === 'string' ? data['tool_id'] : this.createId();
       const tool = typeof data['tool'] === 'string' ? data['tool'] : '分析工具';
       assistant.activities ??= [];
-      assistant.activities.push({ id: toolId, tool, status: 'running' });
+      const args = typeof data['args'] === 'string' ? data['args'] : '';
+      assistant.activities.push({
+        id: toolId,
+        tool,
+        status: 'running',
+        ...(args ? { args } : {}),
+      });
       this.agentStatus = `正在使用${tool}`;
     } else if (event.event === 'tool_end') {
       const toolId = data['tool_id'];
       const activity = assistant.activities?.find((item) => item.id === toolId);
       if (activity) {
         activity.status = 'complete';
+        const output = data['output'];
+        if (typeof output === 'string' && output) {
+          activity.output = output;
+        }
+        if (data['error'] === true) {
+          activity.error = true;
+        }
+        const duration = data['duration_ms'];
+        if (typeof duration === 'number' && Number.isFinite(duration)) {
+          activity.durationMs = duration;
+        }
       }
       this.agentStatus = '工具步骤已完成，继续整理分析';
     } else if (event.event === 'complete') {
