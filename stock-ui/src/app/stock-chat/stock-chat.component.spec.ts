@@ -14,6 +14,15 @@ describe('StockChatComponent', () => {
       providers: [provideZonelessChangeDetection()],
     }).compileComponents();
 
+    // The component merges the server's conversation list on construction.
+    // Default to an empty list; individual tests override the behaviour.
+    spyOn(window, 'fetch').and.resolveTo(
+      new Response('{"code":0,"data":{"threads":[]}}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
     fixture = TestBed.createComponent(StockChatComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
@@ -43,7 +52,7 @@ describe('StockChatComponent', () => {
     ]
       .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
       .join('');
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
 
     component.userQuestion = '分析 TSLA';
     await component.sendChat();
@@ -70,7 +79,7 @@ describe('StockChatComponent', () => {
   });
 
   it('shows backend errors instead of a success-shaped answer', async () => {
-    spyOn(window, 'fetch').and.resolveTo(
+    (window.fetch as jasmine.Spy).and.resolveTo(
       new Response(JSON.stringify({ detail: 'Agent 服务暂不可用' }), {
         status: 502,
         headers: { 'Content-Type': 'application/json' },
@@ -89,7 +98,7 @@ describe('StockChatComponent', () => {
 
   it('starts a new thread without discarding earlier conversations', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '第一次分析';
     await component.sendChat();
     const firstThread = component.currentConversation.threadId;
@@ -101,7 +110,7 @@ describe('StockChatComponent', () => {
 
   it('deletes a conversation from the list and from local storage', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '待删除的分析';
     await component.sendChat();
     const threadId = component.currentConversation.threadId;
@@ -119,7 +128,7 @@ describe('StockChatComponent', () => {
 
   it('keeps the open conversation when a different one is deleted', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '第一条';
     await component.sendChat();
     const firstThread = component.currentConversation.threadId;
@@ -142,7 +151,7 @@ describe('StockChatComponent', () => {
 
   it('asks the server to release the deleted thread', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    const fetchSpy = spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    const fetchSpy = (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '需要释放';
     await component.sendChat();
     const threadId = component.currentConversation.threadId;
@@ -158,7 +167,7 @@ describe('StockChatComponent', () => {
 
   it('clears every conversation after confirmation', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '第一条';
     await component.sendChat();
     component.newChat();
@@ -177,7 +186,7 @@ describe('StockChatComponent', () => {
 
   it('keeps conversations when the clear confirmation is declined', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '保留';
     await component.sendChat();
 

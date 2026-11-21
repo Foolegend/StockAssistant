@@ -83,13 +83,14 @@ class ThreadHistoryTests(unittest.TestCase):
         messages = load_messages("t1")
 
         self.assertEqual(
-            messages,
+            [(item["role"], item["content"]) for item in messages],
             [
-                {"role": "user", "content": "第一条"},
-                {"role": "assistant", "content": "第二条"},
-                {"role": "user", "content": "第三条"},
+                ("user", "第一条"),
+                ("assistant", "第二条"),
+                ("user", "第三条"),
             ],
         )
+        self.assertTrue(all(item["created_at"] for item in messages))
 
     def test_threads_are_isolated_from_each_other(self):
         append_messages("t1", "user", "A 的消息")
@@ -142,6 +143,70 @@ class ThreadHistoryTests(unittest.TestCase):
 
     def test_clear_of_an_unknown_thread_is_harmless(self):
         self.assertEqual(clear_messages("never-seen"), 0)
+
+    def test_list_threads_summarises_conversations(self):
+        from src.services.thread_history import list_threads
+
+        append_messages("t1", "user", "分析 TSLA 的技术面")
+        append_messages("t1", "assistant", "看起来不错")
+        append_messages("t2", "user", "另一条会话")
+
+        threads = list_threads()
+
+        self.assertEqual(len(threads), 2)
+        by_id = {item["thread_id"]: item for item in threads}
+        self.assertEqual(by_id["t1"]["title"], "分析 TSLA 的技术面")
+        self.assertEqual(by_id["t1"]["message_count"], 2)
+        self.assertTrue(by_id["t1"]["updated_at"] >= by_id["t1"]["created_at"])
+
+    def test_list_threads_truncates_long_titles(self):
+        from src.services.thread_history import list_threads
+
+        append_messages("t1", "user", "很长的标题" * 20)
+        title = list_threads()[0]["title"]
+        self.assertLessEqual(len(title), 42)
+        self.assertTrue(title.endswith("…"))
+
+    def test_list_threads_respects_limit_and_offset(self):
+        from src.services.thread_history import list_threads
+
+        for index in range(5):
+            append_messages(f"t{index}", "user", f"会话 {index}")
+
+        first_page = list_threads(limit=2, offset=0)
+        second_page = list_threads(limit=2, offset=2)
+
+        self.assertEqual(len(first_page), 2)
+        self.assertEqual(len(second_page), 2)
+        self.assertNotEqual(
+            {item["thread_id"] for item in first_page},
+            {item["thread_id"] for item in second_page},
+        )
+
+    def test_stale_threads_are_found_by_last_message_time(self):
+        from src.services.thread_history import stale_thread_ids
+
+        append_messages("old", "user", "旧会话")
+        append_messages("new", "user", "新会话")
+
+        future = "2999-01-01T00:00:00+00:00"
+        self.assertIn("old", stale_thread_ids(future))
+        self.assertIn("new", stale_thread_ids(future))
+
+        past = "1970-01-01T00:00:00+00:00"
+        self.assertEqual(stale_thread_ids(past), [])
+
+    def test_delete_threads_removes_only_the_given_threads(self):
+        from src.services.thread_history import delete_threads
+
+        append_messages("t1", "user", "删我")
+        append_messages("t2", "user", "留我")
+
+        removed = delete_threads(["t1"])
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(load_messages("t1"), [])
+        self.assertEqual(len(load_messages("t2")), 1)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,13 @@ describe('StockChatComponent delete UI', () => {
       providers: [provideZonelessChangeDetection()],
     }).compileComponents();
 
+    spyOn(window, 'fetch').and.resolveTo(
+      new Response('{"code":0,"data":{"threads":[]}}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
     fixture = TestBed.createComponent(StockChatComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
@@ -21,7 +28,7 @@ describe('StockChatComponent delete UI', () => {
 
   it('renders a delete button per conversation and a clear-all control', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '一个会话';
     await component.sendChat();
     fixture.detectChanges();
@@ -40,7 +47,7 @@ describe('StockChatComponent delete UI', () => {
 
   it('keeps the conversation title readable next to the delete button', async () => {
     const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
-    spyOn(window, 'fetch').and.resolveTo(new Response(stream));
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
     component.userQuestion = '很长的会话标题用来检查省略号处理是否正常显示出来';
     await component.sendChat();
     fixture.detectChanges();

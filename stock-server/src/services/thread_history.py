@@ -14,12 +14,13 @@ from __future__ import annotations
 import sqlite3
 
 from src.runtime.logging_config import get_logger
-from src.services.db import get_connection
+from src.services.db import get_connection, utc_now
 
 logger = get_logger(__name__)
 
 _MAX_HISTORY_MESSAGES = 40
 _MAX_HISTORY_CHARS = 12000
+_TITLE_CHARS = 42
 
 
 def _connect() -> sqlite3.Connection:
@@ -51,8 +52,9 @@ def append_messages(thread_id: str, role: str, content: str) -> None:
                 (thread_id,),
             ).fetchone()
             connection.execute(
-                "INSERT INTO thread_messages (thread_id, seq, role, content) VALUES (?, ?, ?, ?)",
-                (thread_id, row[0], role, content),
+                "INSERT INTO thread_messages (thread_id, seq, role, content, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (thread_id, row[0], role, content, utc_now()),
             )
     except Exception:  # noqa: BLE001
         logger.exception("failed to append thread history for %s", thread_id)
@@ -69,14 +71,110 @@ def load_messages(thread_id: str, limit: int = _MAX_HISTORY_MESSAGES) -> list[di
 
     try:
         rows = connection.execute(
-            "SELECT role, content FROM thread_messages WHERE thread_id = ? ORDER BY seq DESC LIMIT ?",
+            "SELECT role, content, created_at FROM thread_messages "
+            "WHERE thread_id = ? ORDER BY seq DESC LIMIT ?",
             (thread_id, limit),
         ).fetchall()
     except Exception:  # noqa: BLE001
         logger.exception("failed to load thread history for %s", thread_id)
         return []
 
-    return [{"role": role, "content": content} for role, content in reversed(rows)]
+    return [
+        {"role": role, "content": content, "created_at": created_at}
+        for role, content, created_at in reversed(rows)
+    ]
+
+
+def list_threads(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Return conversation summaries, most recently updated first."""
+    try:
+        connection = _connect()
+    except Exception:  # noqa: BLE001
+        return []
+
+    try:
+        rows = connection.execute(
+            """
+            SELECT m.thread_id,
+                   COUNT(*) AS message_count,
+                   MIN(m.created_at) AS created_at,
+                   MAX(m.created_at) AS updated_at,
+                   (SELECT t2.content
+                      FROM thread_messages t2
+                     WHERE t2.thread_id = m.thread_id AND t2.role = 'user'
+                     ORDER BY t2.seq
+                     LIMIT 1) AS title
+              FROM thread_messages m
+             GROUP BY m.thread_id
+             ORDER BY updated_at DESC
+             LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to list threads")
+        return []
+
+    threads = []
+    for thread_id, message_count, created_at, updated_at, title in rows:
+        text = (title or "").strip().replace("\n", " ")
+        if len(text) > _TITLE_CHARS:
+            text = text[: _TITLE_CHARS - 1] + "…"
+        threads.append(
+            {
+                "thread_id": thread_id,
+                "title": text or "未命名会话",
+                "message_count": message_count,
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+        )
+    return threads
+
+
+def delete_threads(thread_ids: list[str]) -> int:
+    """Delete every message belonging to the given threads.
+
+    Returns the number of message rows removed.
+    """
+    if not thread_ids:
+        return 0
+    try:
+        connection = _connect()
+    except Exception:  # noqa: BLE001
+        return 0
+
+    placeholders = ",".join("?" for _ in thread_ids)
+    try:
+        with connection:
+            cursor = connection.execute(
+                f"DELETE FROM thread_messages WHERE thread_id IN ({placeholders})",
+                list(thread_ids),
+            )
+            removed = cursor.rowcount
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to delete expired threads")
+        return 0
+    return removed
+
+
+def stale_thread_ids(cutoff: str) -> list[str]:
+    """Threads whose most recent message predates ``cutoff`` (ISO text)."""
+    try:
+        connection = _connect()
+    except Exception:  # noqa: BLE001
+        return []
+
+    try:
+        rows = connection.execute(
+            "SELECT thread_id FROM thread_messages "
+            "GROUP BY thread_id HAVING MAX(created_at) < ?",
+            (cutoff,),
+        ).fetchall()
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to find stale threads")
+        return []
+    return [row[0] for row in rows]
 
 
 def build_history_context(thread_id: str, limit: int = _MAX_HISTORY_MESSAGES) -> str:

@@ -338,6 +338,71 @@ class ThreadExportTests(unittest.TestCase):
             export_agent_thread("export-t1", format="pdf")
         self.assertEqual(error.exception.status_code, 400)
 
+    def test_list_endpoint_returns_summaries(self):
+        from src.api.chat import list_agent_threads
+
+        response = list_agent_threads(limit=10, offset=0)
+        threads = response["data"]["threads"]
+
+        self.assertEqual(len(threads), 1)
+        self.assertEqual(threads[0]["thread_id"], "export-t1")
+        self.assertEqual(threads[0]["title"], "分析 TSLA")
+        self.assertEqual(threads[0]["message_count"], 2)
+
+    def test_list_endpoint_clamps_the_limit(self):
+        from src.api.chat import list_agent_threads
+
+        response = list_agent_threads(limit=99999, offset=-5)
+        self.assertEqual(response["code"], 0)
+
+    def test_messages_endpoint_returns_content_and_sources(self):
+        from src.api.chat import get_agent_thread_messages
+
+        response = get_agent_thread_messages("export-t1")
+        messages = response["data"]["messages"]
+
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["role"], "user")
+        self.assertIn("created_at", messages[0])
+        # The assistant answer in setUp has no link, so sources is empty.
+        self.assertEqual(messages[1]["sources"], [])
+
+    def test_messages_endpoint_extracts_links_from_the_answer(self):
+        from src.api.chat import get_agent_thread_messages
+        from src.services.thread_history import append_messages
+
+        append_messages("links-t1", "user", "找资料")
+        append_messages(
+            "links-t1",
+            "assistant",
+            "参考 [公告](https://example.com/a) 与 [研报](https://example.com/b)。",
+        )
+
+        response = get_agent_thread_messages("links-t1")
+        sources = response["data"]["messages"][1]["sources"]
+
+        self.assertEqual(
+            sources,
+            [
+                {"title": "公告", "url": "https://example.com/a"},
+                {"title": "研报", "url": "https://example.com/b"},
+            ],
+        )
+
+    def test_messages_endpoint_404_for_unknown_thread(self):
+        from src.api.chat import get_agent_thread_messages
+
+        with self.assertRaises(HTTPException) as error:
+            get_agent_thread_messages("never-seen")
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_messages_endpoint_400_for_blank_id(self):
+        from src.api.chat import get_agent_thread_messages
+
+        with self.assertRaises(HTTPException) as error:
+            get_agent_thread_messages("   ")
+        self.assertEqual(error.exception.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

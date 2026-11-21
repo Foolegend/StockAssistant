@@ -105,7 +105,14 @@
     <div class="content-layout">
       <section class="conversation-panel" aria-label="智能体对话">
         <div class="message-list" aria-live="polite">
-          <section *ngIf="!currentConversation.messages.length" class="welcome">
+          <p *ngIf="conversationLoading" class="thinking-status">
+            <span class="status-pulse" aria-hidden="true"></span>
+            正在载入会话记录…
+          </p>
+          <section
+            *ngIf="!currentConversation.messages.length && !conversationLoading"
+            class="welcome"
+          >
             <div class="welcome-emblem" aria-hidden="true">
               <svg viewBox="0 0 52 52" fill="none">
                 <path d="M9 35.5 20 24l8 6.5L43 14" />

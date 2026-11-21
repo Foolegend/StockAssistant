@@ -1,5 +1,6 @@
 import re
 import time
+from contextlib import asynccontextmanager
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from uuid import uuid4
@@ -30,10 +31,12 @@ from src.services.component_dependencies import resolve_component_dependencies
 from src.services.component_router import select_components
 from src.services.extension_registry import ExtensionRegistry
 from src.services.hook_runner import HookExecutionError, HookRunner
+from src.services import retention
 from src.services.thread_history import (
     append_messages,
     build_history_context,
     clear_messages,
+    list_threads,
     load_messages,
 )
 from src.services.preference_extractor import extract_preferences
@@ -49,7 +52,16 @@ from src.services.preferences import (
 setup_logging()
 logger = get_logger(__name__)
 
-app = FastAPI(title="StockAssistant Agent")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    retention.start_worker()
+    try:
+        yield
+    finally:
+        retention.stop_worker()
+
+
+app = FastAPI(title="StockAssistant Agent", lifespan=lifespan)
 extension_registry = ExtensionRegistry()
 hook_runner = HookRunner(extension_registry.hooks, str(extension_registry.project_root))
 _active_runs: dict[str, Event] = {}
@@ -607,6 +619,39 @@ def cancel_agent_run(run_id: str):
         raise HTTPException(status_code=404, detail="分析任务不存在或已结束")
     stop_event.set()
     return {"code": 0, "message": "已请求停止当前分析步骤", "data": {"run_id": run_id}}
+
+
+@app.get("/agent/threads")
+def list_agent_threads(limit: int = 50, offset: int = 0):
+    """List stored conversations, most recently updated first."""
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    return {
+        "code": 0,
+        "message": "success",
+        "data": {"threads": list_threads(safe_limit, safe_offset)},
+    }
+
+
+@app.get("/agent/threads/{thread_id}/messages")
+def get_agent_thread_messages(thread_id: str):
+    """Return a stored conversation's messages."""
+    if not thread_id.strip():
+        raise HTTPException(status_code=400, detail="会话 ID 不能为空")
+
+    messages = load_messages(thread_id, limit=1000)
+    if not messages:
+        raise HTTPException(status_code=404, detail="该会话没有可读取的记录")
+
+    for message in messages:
+        if message["role"] == "assistant":
+            message["sources"] = _extract_sources(message["content"])
+
+    return {
+        "code": 0,
+        "message": "success",
+        "data": {"thread_id": thread_id, "messages": messages},
+    }
 
 
 @app.delete("/agent/threads/{thread_id}")

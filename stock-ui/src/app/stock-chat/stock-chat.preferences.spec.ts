@@ -21,7 +21,7 @@ function routeFetch(
     response: () => Response | Promise<Response>;
   }>,
 ) {
-  return spyOn(window, 'fetch').and.callFake(
+  return (window.fetch as jasmine.Spy).and.callFake(
     (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = (init?.method ?? 'GET').toUpperCase();
@@ -57,6 +57,10 @@ describe('StockChatComponent preferences', () => {
       providers: [provideZonelessChangeDetection()],
     }).compileComponents();
 
+    spyOn(window, 'fetch').and.resolveTo(
+      jsonResponse({ code: 0, data: { threads: [] } }),
+    );
+
     fixture = TestBed.createComponent(StockChatComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
@@ -81,7 +85,7 @@ describe('StockChatComponent preferences', () => {
 
   it('adds a preference and clears the draft', async () => {
     const calls: string[] = [];
-    spyOn(window, 'fetch').and.callFake(
+    (window.fetch as jasmine.Spy).and.callFake(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const method = (init?.method ?? 'GET').toUpperCase();
         calls.push(`${method} ${String(input)}`);
@@ -108,7 +112,7 @@ describe('StockChatComponent preferences', () => {
 
   it('toggles a preference through PATCH', async () => {
     let patchedBody = '';
-    spyOn(window, 'fetch').and.callFake(
+    (window.fetch as jasmine.Spy).and.callFake(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const method = (init?.method ?? 'GET').toUpperCase();
         if (method === 'PATCH') {
@@ -132,7 +136,7 @@ describe('StockChatComponent preferences', () => {
   });
 
   it('deletes a preference and removes it from the list', async () => {
-    spyOn(window, 'fetch').and.resolveTo(
+    (window.fetch as jasmine.Spy).and.resolveTo(
       jsonResponse({ code: 0, data: { id: 1 } }),
     );
     component.preferences = [preferenceFixture as never];
@@ -145,7 +149,7 @@ describe('StockChatComponent preferences', () => {
 
   it('edits a preference inline', async () => {
     let patchedBody = '';
-    spyOn(window, 'fetch').and.callFake(
+    (window.fetch as jasmine.Spy).and.callFake(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const method = (init?.method ?? 'GET').toUpperCase();
         if (method === 'PATCH') {
@@ -175,7 +179,7 @@ describe('StockChatComponent preferences', () => {
   });
 
   it('shows a backend error instead of silently failing', async () => {
-    spyOn(window, 'fetch').and.resolveTo(
+    (window.fetch as jasmine.Spy).and.resolveTo(
       jsonResponse({ detail: '偏好服务不可用' }, 503),
     );
 
@@ -213,6 +217,10 @@ describe('StockChatComponent export', () => {
       imports: [StockChatComponent],
       providers: [provideZonelessChangeDetection()],
     }).compileComponents();
+
+    spyOn(window, 'fetch').and.resolveTo(
+      jsonResponse({ code: 0, data: { threads: [] } }),
+    );
 
     fixture = TestBed.createComponent(StockChatComponent);
     component = fixture.componentInstance;

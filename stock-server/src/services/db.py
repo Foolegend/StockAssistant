@@ -17,12 +17,18 @@ and the handle count stays low.
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
 from src.runtime.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def utc_now() -> str:
+    """Timestamp format used by the application tables (sortable as text)."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 _connection: sqlite3.Connection | None = None
 _connection_path: str | None = None
@@ -34,6 +40,7 @@ CREATE TABLE IF NOT EXISTS thread_messages (
     seq INTEGER NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
     PRIMARY KEY (thread_id, seq)
 );
 
@@ -47,6 +54,24 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     updated_at TEXT NOT NULL
 );
 """
+
+
+def _migrate_thread_messages(connection: sqlite3.Connection) -> None:
+    """Add the timestamp column to databases created before it existed."""
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(thread_messages)")
+    }
+    if "created_at" in columns:
+        return
+    connection.execute(
+        "ALTER TABLE thread_messages ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
+    )
+    connection.execute(
+        "UPDATE thread_messages SET created_at = ? WHERE created_at = ''",
+        (utc_now(),),
+    )
+    connection.commit()
+    logger.info("thread_messages gained a created_at column")
 
 
 def _db_path() -> str:
@@ -76,6 +101,7 @@ def get_connection() -> sqlite3.Connection:
         connection = sqlite3.connect(str(file_path), check_same_thread=False)
         connection.executescript(_SCHEMA)
         connection.commit()
+        _migrate_thread_messages(connection)
         _connection = connection
         _connection_path = path
         return _connection

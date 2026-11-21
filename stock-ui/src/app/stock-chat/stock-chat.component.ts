@@ -34,6 +34,8 @@ interface ChatConversation {
   title: string;
   updatedAt: number;
   messages: ChatMessage[];
+  /** True when the messages live only on the server and load on demand. */
+  remote?: boolean;
 }
 
 interface StreamEvent {
@@ -81,6 +83,7 @@ export class StockChatComponent {
   currentConversation: ChatConversation;
   userQuestion = '';
   isLoading = false;
+  conversationLoading = false;
   agentStatus = '';
   apiError: string | null = null;
   storageWarning: string | null = null;
@@ -97,10 +100,15 @@ export class StockChatComponent {
   private abortController?: AbortController;
   private activeRunId?: string;
   private readonly storageKey = 'stock-assistant-conversations-v1';
+  /** Conversations whose full message history is cached locally. */
+  private readonly maxCachedConversations = 30;
+  /** Upper bound for the sidebar list, including server-only entries. */
+  private readonly maxListedConversations = 100;
 
   constructor(private cdr: ChangeDetectorRef) {
     this.conversations = this.loadConversations();
     this.currentConversation = this.createConversation();
+    void this.syncFromServer();
   }
 
   get currentSources(): SourceLink[] {
@@ -133,14 +141,18 @@ export class StockChatComponent {
     this.agentStatus = '';
   }
 
-  openConversation(conversation: ChatConversation): void {
-    if (this.isLoading) {
+  async openConversation(conversation: ChatConversation): Promise<void> {
+    if (this.isLoading || this.conversationLoading) {
       return;
     }
     this.currentConversation = conversation;
     this.userQuestion = '';
     this.apiError = null;
     this.agentStatus = '';
+
+    if (conversation.remote && !conversation.messages.length) {
+      await this.loadConversationMessages(conversation);
+    }
   }
 
   deleteConversation(conversation: ChatConversation): void {
@@ -631,13 +643,154 @@ export class StockChatComponent {
     if (!conversation.messages.length) {
       return;
     }
-    this.conversations = [
+    const merged = [
       conversation,
       ...this.conversations.filter((item) => item.threadId !== conversation.threadId),
-    ]
-      .sort((left, right) => right.updatedAt - left.updatedAt)
-      .slice(0, 30);
+    ].sort((left, right) => right.updatedAt - left.updatedAt);
+
+    // Only a bounded number of conversations keep their messages locally; the
+    // rest stay in the sidebar as server-backed entries and load on demand.
+    // They are never deleted here -- the server owns the data.
+    let cached = 0;
+    this.conversations = merged.slice(0, this.maxListedConversations).map((item) => {
+      if (!item.messages.length) {
+        return item;
+      }
+      if (cached < this.maxCachedConversations) {
+        cached += 1;
+        return item;
+      }
+      return { ...item, messages: [], remote: true };
+    });
     this.persistConversations();
+  }
+
+  /** Merge the server's conversation list into the local one. */
+  private async syncFromServer(): Promise<void> {
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/agent/threads?limit=${this.maxListedConversations}`,
+      );
+      if (!response.ok) {
+        return;
+      }
+      const body: unknown = await response.json();
+      const list =
+        typeof body === 'object' && body !== null
+          ? (body as { data?: { threads?: unknown } }).data?.threads
+          : undefined;
+      if (!Array.isArray(list) || !list.length) {
+        return;
+      }
+
+      const byId = new Map(this.conversations.map((item) => [item.threadId, item]));
+      for (const raw of list) {
+        if (typeof raw !== 'object' || raw === null) {
+          continue;
+        }
+        const record = raw as {
+          thread_id?: unknown;
+          title?: unknown;
+          updated_at?: unknown;
+        };
+        if (typeof record.thread_id !== 'string' || !record.thread_id) {
+          continue;
+        }
+        const updatedAt = Date.parse(String(record.updated_at ?? '')) || Date.now();
+        const title =
+          typeof record.title === 'string' && record.title ? record.title : '未命名会话';
+        const existing = byId.get(record.thread_id);
+        if (existing) {
+          existing.remote = true;
+          existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
+          if (!existing.messages.length || existing.title === '新建分析') {
+            existing.title = title;
+          }
+        } else {
+          byId.set(record.thread_id, {
+            threadId: record.thread_id,
+            title,
+            updatedAt,
+            messages: [],
+            remote: true,
+          });
+        }
+      }
+
+      this.conversations = Array.from(byId.values())
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, this.maxListedConversations);
+      this.persistConversations();
+      this.cdr.detectChanges();
+    } catch {
+      // Offline, backend down, or no server history yet: local history still
+      // works, so this is intentionally silent.
+    }
+  }
+
+  private async loadConversationMessages(conversation: ChatConversation): Promise<void> {
+    this.conversationLoading = true;
+    this.cdr.detectChanges();
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/agent/threads/${encodeURIComponent(conversation.threadId)}/messages`,
+      );
+      if (response.status === 404) {
+        conversation.remote = false;
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      const body: unknown = await response.json();
+      const list =
+        typeof body === 'object' && body !== null
+          ? (body as { data?: { messages?: unknown } }).data?.messages
+          : undefined;
+      const messages = Array.isArray(list)
+        ? list
+            .map((item) => this.toChatMessage(item))
+            .filter((item): item is ChatMessage => item !== null)
+        : [];
+      conversation.messages = messages;
+      conversation.remote = false;
+      this.saveConversation(conversation);
+    } catch (error: unknown) {
+      this.apiError =
+        error instanceof Error ? error.message : '会话记录载入失败';
+    } finally {
+      this.conversationLoading = false;
+      this.cdr.detectChanges();
+    }
+  }
+
+  private toChatMessage(raw: unknown): ChatMessage | null {
+    if (typeof raw !== 'object' || raw === null) {
+      return null;
+    }
+    const record = raw as {
+      role?: unknown;
+      content?: unknown;
+      sources?: unknown;
+    };
+    if (typeof record.content !== 'string') {
+      return null;
+    }
+    const sources = Array.isArray(record.sources)
+      ? record.sources.filter(
+          (source): source is SourceLink =>
+            typeof source === 'object' &&
+            source !== null &&
+            typeof (source as SourceLink).title === 'string' &&
+            typeof (source as SourceLink).url === 'string',
+        )
+      : [];
+    return {
+      id: this.createId(),
+      role: record.role === 'user' ? 'user' : 'assistant',
+      content: record.content,
+      sources,
+    };
   }
 
   private persistConversations(): void {
