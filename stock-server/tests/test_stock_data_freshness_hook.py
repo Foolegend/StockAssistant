@@ -119,7 +119,6 @@ class StockDataFreshnessHookTests(unittest.TestCase):
                 "PostToolUse",
                 context,
                 agent_id="stock-analyst",
-                command_id=None,
             )
 
 

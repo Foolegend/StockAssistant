@@ -29,7 +29,6 @@ class ChatApiRateLimitTests(unittest.TestCase):
             skill_ids=["stock-analysis"],
         )
         resolved = ResolvedComponents(
-            command_ids=[],
             skill_ids=["stock-analysis"],
             mcp_server_ids=[],
             referenced_agent_ids=[],

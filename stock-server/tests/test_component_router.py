@@ -40,13 +40,7 @@ class FakeRegistry:
             "mcp_server_ids": [],
         }
     }
-    commands = {
-        "analyze-stock": {
-            "id": "analyze-stock",
-            "agent_ids": ["stock-analyst"],
-        }
-    }
-    skills = {"stock-analysis": {"id": "stock-analysis"}}
+    skills = {"stock-analysis": {"id": "stock-analysis", "name": "Stock analysis"}}
     mcp_servers = {"market-data": {"id": "market-data"}}
 
     def catalog(self):
@@ -60,14 +54,6 @@ class FakeRegistry:
                     "mcp_servers": [],
                 }
             ],
-            "commands": [
-                {
-                    "id": "analyze-stock",
-                    "name": "Analyze stock",
-                    "description": "Analyze a ticker",
-                    "agent_ids": ["stock-analyst"],
-                }
-            ],
             "skills": [
                 {"id": "stock-analysis", "name": "Stock analysis", "description": "Stock research"}
             ],
@@ -78,11 +64,10 @@ class FakeRegistry:
 
 
 class ComponentRouterTests(unittest.TestCase):
-    def test_selects_registered_agent_command_skill_and_mcp(self):
+    def test_selects_registered_agent_skill_and_mcp(self):
         model = FakeModel(
             {
                 "agent_id": "stock-analyst",
-                "command_id": "analyze-stock",
                 "skill_ids": ["stock-analysis"],
                 "mcp_server_ids": ["market-data"],
             }
@@ -92,37 +77,22 @@ class ComponentRouterTests(unittest.TestCase):
 
         self.assertIsInstance(selection, ComponentSelection)
         self.assertEqual(selection.agent_id, "stock-analyst")
-        self.assertEqual(selection.command_id, "analyze-stock")
         self.assertEqual(selection.skill_ids, ["stock-analysis"])
         self.assertEqual(selection.mcp_server_ids, ["market-data"])
         self.assertIs(model.schema, ComponentSelection)
         self.assertEqual(model.method, "function_calling")
 
-    def test_retries_when_router_uses_command_display_name_instead_of_id(self):
+    def test_retries_when_router_uses_skill_display_name_instead_of_id(self):
         registry = FakeRegistry()
-        registry.commands = {
-            "setup-pm": {
-                "id": "setup-pm",
-                "name": "/setup-pm",
-                "agent_ids": ["stock-analyst"],
-            }
-        }
-        catalog = registry.catalog()
-        catalog["commands"] = [
-            {"id": "setup-pm", "name": "/setup-pm", "agent_ids": ["stock-analyst"]}
-        ]
-        registry.catalog = lambda: catalog
         model = FakeModel(
             [
                 {
                     "agent_id": "stock-analyst",
-                    "command_id": "/setup-pm",
-                    "skill_ids": [],
+                    "skill_ids": ["Stock analysis"],
                     "mcp_server_ids": [],
                 },
                 {
                     "agent_id": "stock-analyst",
-                    "command_id": None,
                     "skill_ids": [],
                     "mcp_server_ids": [],
                 },
@@ -131,10 +101,10 @@ class ComponentRouterTests(unittest.TestCase):
 
         selection = select_components("Analyze a stock", registry, model)
 
-        self.assertIsNone(selection.command_id)
+        self.assertEqual(selection.skill_ids, [])
         self.assertEqual(len(model.structured_model.calls), 2)
         self.assertIn(
-            "select null when no command directly applies",
+            "exact registered component ids",
             model.structured_model.calls[1][1].content.lower(),
         )
 
@@ -142,7 +112,6 @@ class ComponentRouterTests(unittest.TestCase):
         model = FakeModel(
             {
                 "agent_id": None,
-                "command_id": None,
                 "skill_ids": [],
                 "mcp_server_ids": [],
             }
@@ -151,7 +120,6 @@ class ComponentRouterTests(unittest.TestCase):
         selection = select_components("帮我写一首关于秋天的诗", FakeRegistry(), model)
 
         self.assertIsNone(selection.agent_id)
-        self.assertIsNone(selection.command_id)
         self.assertEqual(selection.skill_ids, [])
         self.assertEqual(selection.mcp_server_ids, [])
 
@@ -159,7 +127,6 @@ class ComponentRouterTests(unittest.TestCase):
         model = FakeModel(
             {
                 "agent_id": None,
-                "command_id": None,
                 "skill_ids": ["stock-analysis"],
                 "mcp_server_ids": [],
             }
@@ -174,7 +141,6 @@ class ComponentRouterTests(unittest.TestCase):
         model = FakeModel(
             {
                 "agent_id": "stock-analyst",
-                "command_id": None,
                 "skill_ids": ["stock-analysis"],
                 "mcp_server_ids": [],
             }
@@ -188,7 +154,6 @@ class ComponentRouterTests(unittest.TestCase):
     def test_rejects_unregistered_component_ids(self):
         invalid_selection = {
             "agent_id": "unknown-agent",
-            "command_id": None,
             "skill_ids": [],
             "mcp_server_ids": [],
         }
@@ -202,13 +167,11 @@ class ComponentRouterTests(unittest.TestCase):
             [
                 {
                     "agent_id": "null",
-                    "command_id": None,
                     "skill_ids": [],
                     "mcp_server_ids": [],
                 },
                 {
                     "agent_id": "stock-analyst",
-                    "command_id": None,
                     "skill_ids": [],
                     "mcp_server_ids": [],
                 },
@@ -227,7 +190,6 @@ class ComponentRouterTests(unittest.TestCase):
     def test_omitted_agent_id_is_accepted_as_direct_selection(self):
         model = FakeModel(
             {
-                "command_id": None,
                 "skill_ids": [],
                 "mcp_server_ids": [],
             }
@@ -238,22 +200,6 @@ class ComponentRouterTests(unittest.TestCase):
         self.assertIsNone(selection.agent_id)
         self.assertEqual(len(model.structured_model.calls), 1)
 
-    def test_rejects_command_not_available_to_selected_agent(self):
-        invalid_selection = {
-            "agent_id": "stock-analyst",
-            "command_id": "analyze-stock",
-            "skill_ids": [],
-            "mcp_server_ids": [],
-        }
-        model = FakeModel([invalid_selection, invalid_selection])
-        registry = FakeRegistry()
-        registry.commands = {
-            "analyze-stock": {"id": "analyze-stock", "agent_ids": ["another-agent"]}
-        }
-
-        with self.assertRaisesRegex(ValueError, "not available"):
-            select_components("Analyze TSLA", registry, model)
-
     def test_rejects_unregistered_skill_and_mcp_ids(self):
         for field, selected_id, message in (
             ("skill_ids", ["unknown-skill"], "unknown skill"),
@@ -261,7 +207,6 @@ class ComponentRouterTests(unittest.TestCase):
         ):
             selection = {
                 "agent_id": "stock-analyst",
-                "command_id": None,
                 "skill_ids": [],
                 "mcp_server_ids": [],
             }

@@ -74,10 +74,9 @@ _GREETING_ONLY = re.compile(
 )
 
 logger.info(
-    "extension registry loaded: root=%s agents=%d commands=%d skills=%d mcp_servers=%d hooks=%d",
+    "extension registry loaded: root=%s agents=%d skills=%d mcp_servers=%d hooks=%d",
     extension_registry.stock_extension_root,
     len(extension_registry.agents),
-    len(extension_registry.commands),
     len(extension_registry.skills),
     len(extension_registry.mcp_servers),
     len(extension_registry.hooks),
@@ -243,7 +242,6 @@ def _direct_response(thread_id: str, answer: str) -> dict:
             "answer": answer,
             "sources": _extract_sources(answer),
             "agent_id": None,
-            "command_id": None,
             "skills": [],
             "model": None,
             "thread_id": thread_id,
@@ -295,15 +293,13 @@ def _run_agent_chat(
             routing_model = make_llm(temperature=0)
             selection = select_components(req.question, extension_registry, routing_model)
             logger.info(
-                "routing selection agent=%s command=%s skills=%s mcp_servers=%s",
+                "routing selection agent=%s skills=%s mcp_servers=%s",
                 selection.agent_id,
-                selection.command_id,
                 selection.skill_ids,
                 selection.mcp_server_ids,
             )
             if (
                 selection.agent_id
-                or selection.command_id
                 or selection.skill_ids
                 or selection.mcp_server_ids
             ):
@@ -314,9 +310,8 @@ def _run_agent_chat(
                     routing_model,
                 )
                 logger.info(
-                    "routing resolved commands=%s skills=%s mcp_servers=%s "
+                    "routing resolved skills=%s mcp_servers=%s "
                     "referenced_agents=%s",
-                    resolved.command_ids,
                     resolved.skill_ids,
                     resolved.mcp_server_ids,
                     resolved.referenced_agent_ids,
@@ -384,25 +379,19 @@ def _run_agent_chat(
         logger.info("routing pinned skills=%s", pinned_skill_names)
 
     if selection.agent_id is not None:
-        try:
-            agent, command = extension_registry.resolve(
+        agent = extension_registry.agents.get(selection.agent_id)
+        if agent is None:
+            logger.error(
+                "component resolve failed agent=%s",
                 selection.agent_id,
-                selection.command_id,
-            )
-        except (KeyError, ValueError) as error:
-            logger.exception(
-                "component resolve failed agent=%s command=%s",
-                selection.agent_id,
-                selection.command_id,
             )
             raise HTTPException(
                 status_code=502,
-                detail=f"Component routing failed: {error}",
-            ) from error
+                detail=f"Component routing failed: Unknown agent '{selection.agent_id}'",
+            )
         agent_id = agent["id"]
         runtime_config = extension_registry.agent_runtime_config(
             agent,
-            command,
             _system_prompt_with_preferences(),
             skill_ids=resolved.skill_ids,
             pinned_skills=pinned_skill_names,
@@ -411,13 +400,7 @@ def _run_agent_chat(
         )
     else:
         agent_id = None
-        command = (
-            extension_registry.commands.get(selection.command_id)
-            if selection.command_id
-            else None
-        )
         runtime_config = extension_registry.generic_runtime_config(
-            command,
             _system_prompt_with_preferences(),
             skill_ids=resolved.skill_ids,
             pinned_skills=pinned_skill_names,
@@ -427,28 +410,17 @@ def _run_agent_chat(
 
     config = AgentConfig(**runtime_config)
     logger.info(
-        "resolved agent=%s command=%s model=%s skills=%s mcp_servers=%s",
+        "resolved agent=%s model=%s skills=%s mcp_servers=%s",
         agent_id,
-        command["id"] if command else None,
         config.model_name,
         config.selected_skill_ids,
         config.mcp_servers,
     )
 
-    additional_commands = [
-        extension_registry.commands[command_id]
-        for command_id in resolved.command_ids
-        if command_id != selection.command_id
-    ]
-    question = extension_registry.command_input(
-        command,
-        req.question,
-        additional_commands=additional_commands,
-    )
+    question = req.question
     hook_context = {
         "question": req.question,
         "agent_id": agent_id,
-        "command_id": command["id"] if command else None,
         "thread_id": req.thread_id,
     }
     report(
@@ -470,7 +442,6 @@ def _run_agent_chat(
             "before_agent",
             hook_context,
             agent_id=agent_id,
-            command_id=command["id"] if command else None,
         )
         if was_stopped():
             return None
@@ -504,29 +475,25 @@ def _run_agent_chat(
             "after_agent",
             {**hook_context, "answer": answer},
             agent_id=agent_id,
-            command_id=command["id"] if command else None,
         )
     except Exception as error:
         if isinstance(error, RateLimitError):
             logger.warning(
-                "chat rate limited thread_id=%s agent=%s command=%s",
+                "chat rate limited thread_id=%s agent=%s",
                 req.thread_id,
                 agent_id,
-                command["id"] if command else None,
             )
         else:
             logger.exception(
-                "chat failed thread_id=%s agent=%s command=%s",
+                "chat failed thread_id=%s agent=%s",
                 req.thread_id,
                 agent_id,
-                command["id"] if command else None,
             )
         try:
             hook_runner.run(
                 "on_error",
                 {**hook_context, "error": str(error)},
                 agent_id=agent_id,
-                command_id=command["id"] if command else None,
             )
         except HookExecutionError as hook_error:
             logger.exception("on_error hook failed")
@@ -545,7 +512,6 @@ def _run_agent_chat(
             "answer": answer,
             "sources": _extract_sources(answer),
             "agent_id": agent_id,
-            "command_id": command["id"] if command else None,
             "skills": [
                 {"id": skill_id, "name": extension_registry.skills[skill_id]["name"]}
                 for skill_id in resolved.skill_ids

@@ -14,7 +14,7 @@ PROJECT_ROOT = SERVER_ROOT.parent
 _EXTENSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _PROJECT_RUNTIME_GUIDANCE = """
 ## Project definition compatibility
-- These Agent, Command, and Skill files are instructions, not executable editor plugins.
+- These Agent and Skill files are instructions, not executable editor plugins.
 - For an Agent-tool delegation request, use the registered `task` tool and the matching loaded subagent.
 - For a Skill-tool request, read and follow the matching skill in the loaded Skills catalog.
 - `Bash` requests may use the available `execute` tool within the configured workspace.
@@ -189,7 +189,6 @@ class ExtensionRegistry:
             hook_entries.extend(_read_native_hooks_config(root / "hooks" / "hooks.json"))
         self.hooks = _validate_entries(hook_entries, "project hook definitions")
         self.agents: dict[str, dict[str, Any]] = {}
-        self.commands: dict[str, dict[str, Any]] = {}
 
         self.agent_source_roots: dict[str, Path] = {}
         self._discover_project_definitions()
@@ -288,31 +287,6 @@ class ExtensionRegistry:
                 }
                 self.agent_source_roots[agent_id] = agent_root
 
-            for command_file in sorted((config_dir / "commands").rglob("*.md")):
-                metadata = _read_markdown_metadata(command_file)
-                command_id = _normalized_id(
-                    command_file.relative_to(config_dir / "commands").with_suffix("").as_posix(),
-                    command_file,
-                )
-                if command_id in self.commands:
-                    raise ValueError(f"Duplicate command id '{command_id}' in {command_file}")
-                description = metadata.get("description", "")
-                if not isinstance(description, str):
-                    raise ValueError(f"Command description in {command_file} must be a string")
-                display_name = metadata.get("name") or f"/{command_id}"
-                if not isinstance(display_name, str):
-                    raise ValueError(f"Command name in {command_file} must be a string")
-                self.commands[command_id] = {
-                    "id": command_id,
-                    "name": display_name,
-                    "description": description,
-                    "instruction": None,
-                    "file_path": str(command_file.resolve()),
-                    "agent_ids": [],
-                    "source_type": "project",
-                    "project_root": str(self.project_root),
-                }
-
     def _resolve_skill_ids(self, owner_id: str, raw_skill_ids: list[str]) -> list[str]:
         resolved = []
         for skill_id in raw_skill_ids:
@@ -333,7 +307,6 @@ class ExtensionRegistry:
     def component_content(self, component_type: str, component_id: str) -> str:
         components = {
             "agent": self.agents,
-            "command": self.commands,
             "skill": self.skills,
         }
         component = components.get(component_type, {}).get(component_id)
@@ -414,28 +387,14 @@ class ExtensionRegistry:
                 if not isinstance(matcher, str) or not matcher.strip():
                     raise ValueError(f"Hook '{hook_id}' matcher must be a non-empty string")
                 validate_hook_matcher(matcher)
-            for field, registered_ids in (
-                ("agent_ids", self.agents),
-                ("command_ids", self.commands),
-            ):
-                ids = hook.get(field, [])
-                if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
-                    raise ValueError(f"Hook '{hook_id}' {field} must be an array of IDs")
-                for extension_id in ids:
-                    if extension_id not in registered_ids:
-                        raise ValueError(
-                            f"Hook '{hook_id}' references unknown {field[:-1]} '{extension_id}'"
-                        )
-
-        for command_id, command in self.commands.items():
-            if not isinstance(command.get("instruction"), (str, type(None))):
-                raise ValueError(f"Command '{command_id}' instruction must be a string")
-            agent_ids = command.get("agent_ids", [])
-            if not isinstance(agent_ids, list) or not all(isinstance(item, str) for item in agent_ids):
-                raise ValueError(f"Command '{command_id}' agent_ids must be an array of IDs")
-            for agent_id in agent_ids:
+            ids = hook.get("agent_ids", [])
+            if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
+                raise ValueError(f"Hook '{hook_id}' agent_ids must be an array of IDs")
+            for agent_id in ids:
                 if agent_id not in self.agents:
-                    raise ValueError(f"Command '{command_id}' references unknown agent '{agent_id}'")
+                    raise ValueError(
+                        f"Hook '{hook_id}' references unknown agent '{agent_id}'"
+                    )
 
     def catalog(self) -> dict[str, Any]:
         return {
@@ -484,78 +443,7 @@ class ExtensionRegistry:
                 }
                 for hook_id, hook in self.hooks.items()
             ],
-            "commands": [
-                {
-                    "id": command_id,
-                    "name": command["name"],
-                    "description": command.get("description", ""),
-                    "agent_ids": command.get("agent_ids", []),
-                }
-                for command_id, command in self.commands.items()
-            ],
         }
-
-    def resolve(
-        self,
-        agent_id: str,
-        command_id: str | None,
-    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        agent = self.agents.get(agent_id)
-        command = self.commands.get(command_id) if command_id is not None else None
-        if agent is None:
-            raise KeyError(f"Unknown agent '{agent_id}'")
-        if command_id is not None and command is None:
-            raise KeyError(f"Unknown command '{command_id}'")
-        allowed_agents = command.get("agent_ids", []) if command else []
-        if allowed_agents and agent_id not in allowed_agents:
-            raise ValueError(f"Command '{command_id}' is not available for agent '{agent_id}'")
-        return agent, command
-
-    def command_input(
-        self,
-        command: dict[str, Any] | None,
-        question: str,
-        *,
-        additional_commands: list[dict[str, Any]] | None = None,
-    ) -> str:
-        commands = ([command] if command is not None else []) + (additional_commands or [])
-        if not commands:
-            return question
-        if len(commands) == 1 and not additional_commands:
-            parts = []
-            if commands[0].get("instruction"):
-                parts.append(commands[0]["instruction"])
-            prompt = commands[0].get("prompt") or self.component_content(
-                "command",
-                commands[0]["id"],
-            )
-            if prompt:
-                parts.append(prompt.replace("$ARGUMENTS", question))
-            if not prompt or "$ARGUMENTS" not in prompt:
-                parts.append(f"User request:\n{question}")
-            if len(parts) > 1:
-                return f"## Command: {commands[0]['name']}\n\n" + "\n\n".join(parts)
-            return parts[0] if parts else question
-
-        sections = []
-        for index, nested_command in enumerate(commands):
-            parts = []
-            if nested_command.get("instruction"):
-                parts.append(nested_command["instruction"])
-            prompt = nested_command.get("prompt") or self.component_content(
-                "command",
-                nested_command["id"],
-            )
-            if prompt:
-                parts.append(prompt.replace("$ARGUMENTS", question))
-            if not prompt or "$ARGUMENTS" not in prompt:
-                parts.append(f"User request:\n{question}")
-            if parts:
-                heading = "Command" if index == 0 and command is not None else "Referenced Command"
-                sections.append(
-                    f"## {heading}: {nested_command['name']}\n\n" + "\n\n".join(parts)
-                )
-        return "\n\n".join(sections) if sections else question
 
     def _subagents(
         self,
@@ -583,7 +471,6 @@ class ExtensionRegistry:
     def agent_runtime_config(
         self,
         agent: dict[str, Any],
-        command: dict[str, Any] | None,
         default_system_prompt: str = "",
         *,
         skill_ids: list[str] | None = None,
@@ -599,9 +486,6 @@ class ExtensionRegistry:
         system_prompt = system_prompt or default_system_prompt
         if agent.get("source_type") == "project":
             system_prompt = f"{system_prompt}\n\n{_PROJECT_RUNTIME_GUIDANCE}".strip()
-        instruction = command.get("instruction") if command else None
-        if instruction:
-            system_prompt = f"{system_prompt or ''}\n\n## 当前命令：{command['name']}\n{instruction}".strip()
         if referenced_agent_ids:
             referenced_agents = [
                 f"- {agent_id}: {self.agents[agent_id].get('description', '')}"
@@ -614,10 +498,7 @@ class ExtensionRegistry:
             ).strip()
 
         agent_root = self.agent_source_roots.get(agent["id"])
-        project_root = (
-            (command.get("project_root") if command else None)
-            or (str(agent_root) if agent_root else str(SERVER_ROOT))
-        )
+        project_root = str(agent_root) if agent_root else str(SERVER_ROOT)
         selected_skill_ids = agent.get("skill_ids", []) if skill_ids is None else skill_ids
         selected_mcp_server_ids = (
             agent.get("mcp_server_ids", [])
@@ -651,7 +532,6 @@ class ExtensionRegistry:
 
     def generic_runtime_config(
         self,
-        command: dict[str, Any] | None,
         default_system_prompt: str = "",
         *,
         skill_ids: list[str] | None = None,
@@ -661,16 +541,11 @@ class ExtensionRegistry:
     ) -> dict[str, Any]:
         """Runtime config for a selection that matched no registered agent.
 
-        A command, skill, or MCP server can still be useful without an agent
-        profile, so build a generic deep agent from the default prompt instead
-        of failing the request.
+        A skill or MCP server can still be useful without an agent profile, so
+        build a generic deep agent from the default prompt instead of failing
+        the request.
         """
         system_prompt = f"{default_system_prompt}\n\n{_PROJECT_RUNTIME_GUIDANCE}".strip()
-        instruction = command.get("instruction") if command else None
-        if instruction:
-            system_prompt = (
-                f"{system_prompt}\n\n## 当前命令：{command['name']}\n{instruction}"
-            ).strip()
         if referenced_agent_ids:
             referenced_agents = [
                 f"- {agent_id}: {self.agents[agent_id].get('description', '')}"
@@ -705,9 +580,6 @@ class ExtensionRegistry:
             "mcp_servers": [self.mcp_servers[server_id] for server_id in selected_mcp_server_ids],
             "hooks": self.hooks,
             "system_prompt": system_prompt,
-            "project_root": (
-                (command.get("project_root") if command else None)
-                or str(self.project_root)
-            ),
+            "project_root": str(self.project_root),
             "subagents": self._subagents(None, referenced_agent_ids),
         }

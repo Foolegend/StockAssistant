@@ -6,7 +6,7 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 
 ### 1. 后端 (stock-server)
 基于 **FastAPI** 构建，核心逻辑由 `UnifiedAgent` 驱动。
-- **Agent 核心**：从服务端扩展目录发现 Agent、Command、Skills 和 MCP Servers；前端通过人类可读名称选择，API 使用注册 ID 定位扩展。
+- **Agent 核心**：从服务端扩展目录发现 Agent、Skills 和 MCP Servers；前端通过人类可读名称选择，API 使用注册 ID 定位扩展。
 - **Brain 层**：提供多种 LLM 适配器（Ollama, OpenAI 等）。
 - **Skill 系统**：
   - `stock-analysis`: 股票数据抓取与技术指标分析。
@@ -28,18 +28,15 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 
 - 仅扫描 `stock-server/.stock` 中的扩展，不加载工程根目录下的 `.github`、`.cursor`，也不读取外部目录或使用 `CLAUDE_CONFIG_DIR`。
 - `stock-server/.stock/agents/**/*.md`：自动发现 Agent，并注册为可选 Agent 和可委派子 Agent。
-- `stock-server/.stock/commands/**/*.md`：自动发现 Command；默认名称为 `/命令路径`（可由 frontmatter 的 `name` 覆盖），正文作为工作流指令执行，`$ARGUMENTS` 会替换为用户输入。
 - `stock-server/.stock/skills/**/SKILL.md`：递归发现 Skill，按 DeepAgents Skills middleware 加载；支持 Skill 子目录。
 - `stock-server/.stock/hooks/hooks.json`：读取原生事件、matcher 和 command 定义；`stock-server/.stock/mcp-configs/mcp-servers.json`：读取 `mcpServers` 配置并注册 MCP server。
-- Hook 脚本和共享工具位于 `stock-server/.stock/hooks/scripts/`，由 Hook 配置和 `setup-pm` Command 调用。
+- Hook 脚本和共享工具位于 `stock-server/.stock/hooks/scripts/`，由 Hook 配置调用。
 
-`GET /agent/catalog` 提供已注册组件信息；聊天界面不要求用户选择或提交组件 ID。服务端扫描时只读取 Agent、Command、Skill 的 YAML frontmatter 和文件路径，用名称、描述等摘要进行初选；只在依赖解析或执行时读取已选组件的正文，不把未选组件的正文送入模型上下文。服务端还会递归检查已选 Agent、Command 和 Skill 的正文，解析其中显式或语义上引用的注册组件：嵌套 Command 合并为本轮指令，嵌套 Skill 加载到主 Agent，嵌套 Agent 提供为可委派子 Agent（由主 Agent 决定是否委派）。`POST /agent/chat` 保留一次性响应接口；前端使用 `POST /agent/chat/stream` 接收分析状态、实际工具调用事件和最终回答。请求包含问题、会话 ID 和本次运行 ID；`POST /agent/chat/runs/{run_id}/cancel` 可请求停止任务，停止在当前模型或工具步骤结束后生效。回答中的 Markdown 网页链接会作为来源返回，但不会由服务端独立核验。客户端不接受或提交本地 Skill 路径、MCP 启动命令或组件 ID。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
+`GET /agent/catalog` 提供已注册组件信息；聊天界面不要求用户选择或提交组件 ID。服务端扫描时只读取 Agent、Skill 的 YAML frontmatter 和文件路径，用名称、描述等摘要进行初选；只在依赖解析或执行时读取已选组件的正文，不把未选组件的正文送入模型上下文。服务端还会递归检查已选 Agent 和 Skill 的正文，解析其中显式或语义上引用的注册组件：嵌套 Skill 加载到主 Agent，嵌套 Agent 提供为可委派子 Agent（由主 Agent 决定是否委派）。`POST /agent/chat` 保留一次性响应接口；前端使用 `POST /agent/chat/stream` 接收分析状态、实际工具调用事件和最终回答。请求包含问题、会话 ID 和本次运行 ID；`POST /agent/chat/runs/{run_id}/cancel` 可请求停止任务，停止在当前模型或工具步骤结束后生效。回答中的 Markdown 网页链接会作为来源返回，但不会由服务端独立核验。客户端不接受或提交本地 Skill 路径、MCP 启动命令或组件 ID。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
 
-Command 无需额外 JSON 配置；服务端根据问题选择适用命令，也可以不选择 Command 进行普通对话。
+Agent 无需额外 JSON 配置；Agent Markdown frontmatter 可通过 `skills` 和 `mcp_server_ids` 声明关联能力。Agent、Skill 和 MCP 的最终选择由服务端根据当前问题完成，不使用默认 Agent。
 
-Agent 无需额外 JSON 配置；Agent Markdown frontmatter 可通过 `skills` 和 `mcp_server_ids` 声明关联能力。Agent、Command、Skill 和 MCP 的最终选择由服务端根据当前问题完成，不使用默认 Agent 或默认 Command。
-
-Agent、Command 和 Skill Markdown 是指令，不是 Claude Code 或 Cursor 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载，Command 正文作为本轮任务指令。定义中提及的工具只有在本平台实际配置后才能使用；Claude Code 原生 `settings.json` hooks、Cursor 配置、memory 和权限配置不会导入。只读取仓库内上述扩展目录中的项目文件。
+Agent 和 Skill Markdown 是指令，不是 Claude Code 或 Cursor 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载。定义中提及的工具只有在本平台实际配置后才能使用；Claude Code 原生 `settings.json` hooks、Cursor 配置、memory 和权限配置不会导入。只读取仓库内上述扩展目录中的项目文件。
 
 Hook 从扩展目录下的 `hooks/hooks.json` 加载，使用原生事件名、matcher 和 command 定义。例如：
 
@@ -157,6 +154,6 @@ Copy-Item stock-server\.env.template stock-server\.env
 ## 📁 目录结构
 - `stock-server/`: 后端核心代码
   - `src/`: 源代码 (api, agent, brain, services)
-  - `.stock/`: Agent、Command、Skill、Hook 和 MCP 扩展定义
+  - `.stock/`: Agent、Skill、Hook 和 MCP 扩展定义
 - `stock-ui/`: 前端界面代码
 - `.venv/`: Python 虚拟环境

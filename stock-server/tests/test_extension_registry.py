@@ -29,12 +29,6 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.config_root.mkdir(parents=True)
         self.skills_root = self.root / "stock-server" / ".stock" / "skills"
         self.skills_root.mkdir(parents=True)
-        chat_command = self.root / "stock-server" / ".stock" / "commands" / "chat.md"
-        chat_command.parent.mkdir(parents=True)
-        chat_command.write_text(
-            "---\nname: Chat\ndescription: General chat.\n---\nAnswer clearly.\n",
-            encoding="utf-8",
-        )
         agents_dir = self.root / "stock-server" / ".stock" / "agents"
         agents_dir.mkdir(parents=True)
         (agents_dir / "assistant.md").write_text(
@@ -75,11 +69,10 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         self.assertEqual(catalog["agents"][0]["name"], "Assistant")
         self.assertEqual(catalog["agents"][0]["skills"][0]["id"], "sample-skill")
-        self.assertEqual(catalog["commands"][0]["name"], "Chat")
         self.assertEqual(catalog["mcp_servers"][0]["id"], "local-tools")
         self.assertEqual(catalog["skills"][0]["id"], "sample-skill")
+        self.assertNotIn("commands", catalog)
         self.assertNotIn("default_agent_id", catalog)
-        self.assertNotIn("default_command_id", catalog)
 
     def test_component_bodies_are_read_only_when_requested(self):
         with patch(
@@ -89,30 +82,12 @@ class ExtensionRegistryTests(unittest.TestCase):
             registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
         self.assertNotIn("prompt", registry.agents["assistant"])
-        self.assertNotIn("prompt", registry.commands["chat"])
         self.assertNotIn("content", registry.skills["sample-skill"])
 
         self.assertEqual(registry.component_content("agent", "assistant"), "")
-        self.assertEqual(
-            registry.component_content("command", "chat"),
-            "Answer clearly.",
-        )
         self.assertIn(
             "# Sample",
             registry.component_content("skill", "sample-skill"),
-        )
-
-    def test_component_body_is_read_from_disk_after_registry_discovery(self):
-        registry = ExtensionRegistry(self.config_root, project_root=self.root)
-        command_file = Path(registry.commands["chat"]["file_path"])
-        command_file.write_text(
-            "---\nname: Chat\ndescription: Updated summary.\n---\nUpdated body.\n",
-            encoding="utf-8",
-        )
-
-        self.assertEqual(
-            registry.component_content("command", "chat"),
-            "Updated body.",
         )
 
     def test_github_duplicate_skill_is_ignored(self):
@@ -167,11 +142,10 @@ class ExtensionRegistryTests(unittest.TestCase):
 
     def test_runtime_config_resolves_only_server_registered_components(self):
         registry = ExtensionRegistry(self.config_root, project_root=self.root)
-        agent, command = registry.resolve("assistant", "chat")
+        agent = registry.agents["assistant"]
 
         runtime = registry.agent_runtime_config(
             agent,
-            command,
             "Base instructions.",
             skill_ids=[],
             mcp_server_ids=[],
@@ -182,31 +156,6 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(runtime["selected_skill_directories"], {})
         self.assertEqual(runtime["mcp_servers"], [])
         self.assertIn("Base instructions.", runtime["system_prompt"])
-        self.assertIn("Answer clearly.", registry.command_input(command, "hello"))
-
-    def test_command_input_composes_nested_command_instructions(self):
-        registry = ExtensionRegistry(self.config_root, project_root=self.root)
-        root_command = {
-            "id": "root",
-            "name": "/root",
-            "prompt": "Root task: $ARGUMENTS",
-            "instruction": None,
-        }
-        nested_command = {
-            "id": "nested",
-            "name": "/nested",
-            "prompt": "Nested task: $ARGUMENTS",
-            "instruction": None,
-        }
-
-        result = registry.command_input(
-            root_command,
-            "analyze TSLA",
-            additional_commands=[nested_command],
-        )
-
-        self.assertIn("Root task: analyze TSLA", result)
-        self.assertIn("Nested task: analyze TSLA", result)
 
     def test_stock_root_uses_the_mcp_config_path(self):
         mcp_config_dir = self.root / "stock-server" / ".stock" / "mcp-configs"
@@ -275,12 +224,6 @@ class ExtensionRegistryTests(unittest.TestCase):
                 "headers": {"Authorization": "Bearer token"},
             },
         )
-
-    def test_unknown_agent_is_rejected(self):
-        registry = ExtensionRegistry(self.config_root, project_root=self.root)
-
-        with self.assertRaises(KeyError):
-            registry.resolve("not-registered", "chat")
 
     def test_unknown_skill_reference_fails_registry_initialization(self):
         (self.root / "stock-server" / ".stock" / "agents" / "assistant.md").write_text(
@@ -409,7 +352,6 @@ class ExtensionRegistryTests(unittest.TestCase):
             "PreToolUse",
             {"tool": "Write", "tool_input": {"file_path": "README.md"}},
             agent_id="assistant",
-            command_id=None,
         )
         self.assertFalse(marker.exists())
 
@@ -417,7 +359,6 @@ class ExtensionRegistryTests(unittest.TestCase):
             "PreToolUse",
             {"tool": "Write", "tool_input": {"file_path": "notes.txt"}},
             agent_id="assistant",
-            command_id=None,
         )
         self.assertEqual(marker.read_text(encoding="utf-8"), "ran")
 
@@ -444,7 +385,6 @@ class ExtensionRegistryTests(unittest.TestCase):
             "PreToolUse",
             {"tool": "Bash", "tool_input": {"command": "git status"}},
             agent_id="assistant",
-            command_id=None,
         )
 
         self.assertEqual(marker.read_text(encoding="utf-8"), "ran")
@@ -474,7 +414,6 @@ class ExtensionRegistryTests(unittest.TestCase):
                 "PreToolUse",
                 {"tool": "Bash", "tool_input": {"command": "git status"}},
                 agent_id="assistant",
-                command_id=None,
             )
 
         self.assertEqual(run.call_args.kwargs["env"]["STOCK_PLUGIN_ROOT"], str(self.root))
@@ -596,7 +535,7 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(result.tool_call_id, "call-1")
         self.assertIn("rejected by a post-tool hook", result.content)
 
-    def test_hook_runner_passes_json_context_and_uses_registered_filters(self):
+    def test_hook_runner_passes_json_context_and_uses_registered_agent_filters(self):
         output_path = self.root / "hook-context.json"
         script = (
             "import json, pathlib, sys; "
@@ -608,7 +547,6 @@ class ExtensionRegistryTests(unittest.TestCase):
                     "event": "after_agent",
                     "command": [sys.executable, "-c", script, str(output_path)],
                     "agent_ids": ["assistant"],
-                    "command_ids": ["chat"],
                     "timeout_seconds": 5,
                 }
             },
@@ -619,7 +557,6 @@ class ExtensionRegistryTests(unittest.TestCase):
             "after_agent",
             {"question": "hello", "answer": "world"},
             agent_id="assistant",
-            command_id="chat",
         )
 
         self.assertEqual(
@@ -643,30 +580,21 @@ class ExtensionRegistryTests(unittest.TestCase):
                 "before_agent",
                 {},
                 agent_id="assistant",
-                command_id="chat",
             )
 
     def test_discovers_only_stock_definitions(self):
         stock_root = self.root / "stock-server" / ".stock"
         agents_dir = stock_root / "agents"
-        commands_dir = stock_root / "commands" / "workflows"
         skill_dir = stock_root / "skills" / "group" / "nested"
         github_root = self.root / ".github"
         cursor_root = self.root / ".cursor"
         agents_dir.mkdir(parents=True, exist_ok=True)
-        commands_dir.mkdir(parents=True)
         skill_dir.mkdir(parents=True)
         (github_root / "agents").mkdir(parents=True, exist_ok=True)
-        (github_root / "commands").mkdir(parents=True)
         (stock_root / "hooks").mkdir(parents=True)
         (cursor_root / "agents").mkdir(parents=True)
-        (cursor_root / "commands").mkdir(parents=True)
         (agents_dir / "helper.md").write_text(
             "---\nname: helper-agent\ndescription: A helper agent.\nskills:\n  - group/nested\n---\nHelp with focused tasks.\n",
-            encoding="utf-8",
-        )
-        (commands_dir / "run.md").write_text(
-            "---\ndescription: Run a workflow.\nargument-hint: [topic]\n---\nWork on $ARGUMENTS.\n",
             encoding="utf-8",
         )
         (skill_dir / "SKILL.md").write_text(
@@ -677,16 +605,8 @@ class ExtensionRegistryTests(unittest.TestCase):
             "---\nname: github-helper\n---\nGitHub helper.\n",
             encoding="utf-8",
         )
-        (github_root / "commands" / "github-task.md").write_text(
-            "---\ndescription: GitHub command.\n---\nRun the GitHub task.\n",
-            encoding="utf-8",
-        )
         (cursor_root / "agents" / "cursor-helper.md").write_text(
             "---\nname: cursor-helper\n---\nCursor helper.\n",
-            encoding="utf-8",
-        )
-        (cursor_root / "commands" / "cursor-task.md").write_text(
-            "---\ndescription: Cursor command.\n---\nRun the Cursor task.\n",
             encoding="utf-8",
         )
         mcp_config_dir = stock_root / "mcp-configs"
@@ -730,22 +650,18 @@ class ExtensionRegistryTests(unittest.TestCase):
         with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(external_root)}):
             registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
-        agent, command = registry.resolve("helper-agent", "workflows/run")
-        runtime = registry.agent_runtime_config(agent, command)
+        agent = registry.agents["helper-agent"]
+        runtime = registry.agent_runtime_config(agent)
 
         self.assertEqual(
             registry.component_content("agent", "helper-agent"),
             "Help with focused tasks.",
         )
-        self.assertEqual(command["name"], "/workflows/run")
-        self.assertIn("Work on Analyze the project.", registry.command_input(command, "Analyze the project."))
         self.assertIn(str((stock_root / "skills" / "group").resolve()), runtime["skill_dirs"])
         self.assertEqual(runtime["project_root"], str(self.root))
         self.assertIn("task", runtime["system_prompt"])
         self.assertNotIn("github-helper", registry.agents)
         self.assertNotIn("cursor-helper", registry.agents)
-        self.assertNotIn("github-task", registry.commands)
-        self.assertNotIn("cursor-task", registry.commands)
         self.assertIn("project-tools", registry.mcp_servers)
         self.assertIn("SessionStart", {hook["event"] for hook in registry.hooks.values()})
         self.assertNotIn("external-agent", registry.agents)
@@ -760,7 +676,6 @@ class ExtensionRegistryTests(unittest.TestCase):
             [agent["id"] for agent in catalog["agents"]],
             ["stock-analyst"],
         )
-        self.assertEqual(catalog["commands"], [])
         self.assertEqual(list(registry.mcp_servers), ["sequential-thinking"])
         self.assertEqual(len(registry.hooks), 1)
         stock_data_hook = next(iter(registry.hooks.values()))
@@ -782,7 +697,7 @@ class ExtensionRegistryTests(unittest.TestCase):
     def test_stock_analyst_workspace_uses_project_root(self):
         agent = extension_registry.agents["stock-analyst"]
 
-        runtime = extension_registry.agent_runtime_config(agent, None)
+        runtime = extension_registry.agent_runtime_config(agent)
 
         self.assertEqual(
             runtime["project_root"],
@@ -799,19 +714,6 @@ class ExtensionRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workspace_root"):
             ExtensionRegistry(self.config_root, project_root=self.root)
 
-    def test_chat_works_without_project_commands(self):
-        (self.root / "stock-server" / ".stock" / "commands" / "chat.md").unlink()
-        registry = ExtensionRegistry(self.config_root, project_root=self.root)
-
-        agent, command = registry.resolve("assistant", None)
-
-        self.assertIsNone(command)
-        self.assertEqual(registry.command_input(command, "hello"), "hello")
-        self.assertEqual(
-            registry.agent_runtime_config(agent, command)["project_root"],
-            str(self.root),
-        )
-
     def test_api_catalog_returns_registered_display_options(self):
         response = agent_catalog()
 
@@ -825,13 +727,11 @@ class ExtensionRegistryTests(unittest.TestCase):
         request = AgentChatRequest(question="分析 TSLA")
         selection = ComponentSelection(
             agent_id="stock-analyst",
-            command_id=None,
             skill_ids=["stock-analysis"],
             mcp_server_ids=[],
         )
 
         resolved = ResolvedComponents(
-            command_ids=[],
             skill_ids=["stock-analysis"],
             mcp_server_ids=[],
             referenced_agent_ids=[],
@@ -847,7 +747,7 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         self.assertEqual(response["data"]["answer"], "分析完成")
         self.assertEqual(response["data"]["agent_id"], "stock-analyst")
-        self.assertIsNone(response["data"]["command_id"])
+        self.assertNotIn("command_id", response["data"])
         self.assertEqual(
             response["data"]["skills"],
             [{
@@ -924,7 +824,7 @@ class ExtensionRegistryTests(unittest.TestCase):
 
         self.assertEqual(response["data"]["answer"], "秋天来了。")
         self.assertIsNone(response["data"]["agent_id"])
-        self.assertIsNone(response["data"]["command_id"])
+        self.assertNotIn("command_id", response["data"])
         self.assertEqual(response["data"]["thread_id"], "direct-thread")
         resolve.assert_not_called()
         ask_agent.assert_not_called()
@@ -937,7 +837,6 @@ class ExtensionRegistryTests(unittest.TestCase):
         )
         selection = ComponentSelection(skill_ids=["stock-analysis"])
         resolved = ResolvedComponents(
-            command_ids=[],
             skill_ids=["stock-analysis"],
             mcp_server_ids=[],
             referenced_agent_ids=[],
@@ -961,13 +860,11 @@ class ExtensionRegistryTests(unittest.TestCase):
         request = AgentChatRequest(question="hello, help me debug a failing endpoint")
         selection = ComponentSelection(
             agent_id="stock-analyst",
-            command_id=None,
             skill_ids=[],
             mcp_server_ids=[],
         )
 
         resolved = ResolvedComponents(
-            command_ids=[],
             skill_ids=[],
             mcp_server_ids=[],
             referenced_agent_ids=[],
@@ -1001,9 +898,8 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertIn("Component routing failed", error.exception.detail)
 
     def test_chat_request_rejects_user_supplied_component_ids(self):
-        for field in ("agent_id", "command_id"):
-            with self.subTest(field=field), self.assertRaises(ValidationError):
-                AgentChatRequest(question="hello", **{field: "stock-analyst"})
+        with self.assertRaises(ValidationError):
+            AgentChatRequest(question="hello", agent_id="stock-analyst")
 
     def test_chat_requests_get_unique_thread_ids_by_default(self):
         first = AgentChatRequest(question="first")

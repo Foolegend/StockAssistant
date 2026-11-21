@@ -25,7 +25,6 @@ interface ChatMessage {
   activities?: AgentActivity[];
   sources?: SourceLink[];
   agentId?: string | null;
-  commandId?: string | null;
   model?: string | null;
 }
 
@@ -697,8 +696,6 @@ export class StockChatComponent {
           )
         : [];
       assistant.agentId = typeof data['agent_id'] === 'string' ? data['agent_id'] : null;
-      assistant.commandId =
-        typeof data['command_id'] === 'string' ? data['command_id'] : null;
       assistant.model = typeof data['model'] === 'string' ? data['model'] : null;
       assistant.status = '分析完成';
     } else if (event.event === 'cancelled') {

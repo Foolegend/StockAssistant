@@ -46,7 +46,6 @@ describe('StockChatComponent', () => {
           answer: '## 分析摘要\n\n参考 [公司公告](https://example.com/report)。',
           sources: [{ title: '公司公告', url: 'https://example.com/report' }],
           agent_id: 'stock-analyst',
-          command_id: null,
           model: 'test-model',
         },
       },

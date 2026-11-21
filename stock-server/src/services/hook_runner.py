@@ -39,7 +39,6 @@ class HookRunner:
         context: dict[str, Any],
         *,
         agent_id: str | None,
-        command_id: str | None,
     ) -> None:
         payload = json.dumps(
             {**context, "event": event},
@@ -53,8 +52,6 @@ class HookRunner:
             if matcher and not matches_hook(matcher, context):
                 continue
             if hook.get("agent_ids") and agent_id not in hook["agent_ids"]:
-                continue
-            if hook.get("command_ids") and command_id not in hook["command_ids"]:
                 continue
 
             matched_any = True
@@ -208,7 +205,6 @@ class HookToolMiddleware(AgentMiddleware):
             "PreToolUse",
             hook_context,
             agent_id="",
-            command_id=None,
         )
 
         try:
@@ -243,7 +239,6 @@ class HookToolMiddleware(AgentMiddleware):
                     "tool_response": tool_output,
                 },
                 agent_id="",
-                command_id=None,
             )
         except HookExecutionError as error:
             # A post-tool validation failure must not abort the whole agent run
