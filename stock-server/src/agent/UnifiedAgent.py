@@ -157,6 +157,10 @@ class AgentConfig:
     skill_dirs: Optional[List[str]] = None
     selected_skill_ids: Optional[List[str]] = None
     selected_skill_directories: Optional[dict[str, List[str]]] = None
+    # Skill *names* whose SKILL.md body should be injected into the first model
+    # call.  The router-selected skill is pinned so the model cannot skip the
+    # skill's workflow and fall back to an old thread's tooling.
+    pinned_skills: Optional[List[str]] = None
     mcp_servers: Optional[List[dict | str]] = None
     hooks: Optional[dict[str, dict]] = None
     system_prompt: Optional[str] = None
@@ -170,6 +174,8 @@ class AgentConfig:
             self.skill_dirs = self._normalize_list(self.skill_dirs)
         if self.selected_skill_ids is not None:
             self.selected_skill_ids = self._normalize_list(self.selected_skill_ids)
+        if self.pinned_skills is not None:
+            self.pinned_skills = self._normalize_list(self.pinned_skills)
         if self.mcp_servers is not None:
             self.mcp_servers = self._normalize_list(self.mcp_servers)
 
@@ -345,6 +351,7 @@ def _cached_agent(config: Optional[AgentConfig]):
         "skill_dirs": cfg.skill_dirs,
         "selected_skill_ids": cfg.selected_skill_ids,
         "selected_skill_directories": cfg.selected_skill_directories,
+        "pinned_skills": cfg.pinned_skills,
         "mcp_servers": cfg.mcp_servers,
         "hooks": cfg.hooks,
         "system_prompt": cfg.system_prompt,
@@ -372,6 +379,21 @@ def _cached_agents() -> list:
         return list(_AGENT_CACHE.values())
 
 
+def _agent_input(question: str, config: Optional[AgentConfig]) -> dict:
+    """Build the graph input, pinning selected skill bodies when available.
+
+    SkillsMiddleware consumes ``pinned_skills`` before the first model call and
+    appends each named SKILL.md to the conversation.  This guarantees the model
+    sees the workflow even when the thread history is dominated by another
+    skill's earlier runs.
+    """
+    state: dict = {"messages": [{"role": "user", "content": question}]}
+    if config is not None and config.pinned_skills:
+        state["pinned_skills"] = list(config.pinned_skills)
+        logger.info("agent pinned skills=%s", config.pinned_skills)
+    return state
+
+
 def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: str = "default") -> str:
     agent = _cached_agent(config)
     logger.info(
@@ -382,7 +404,7 @@ def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: st
     started = time.perf_counter()
     try:
         result = agent.invoke(
-            {"messages": [{"role": "user", "content": question}]},
+            _agent_input(question, config),
             config={"configurable": {"thread_id": thread_id}},
         )
     except RateLimitError as error:
@@ -439,7 +461,7 @@ def stream_agent(
     started = time.perf_counter()
 
     for update in agent.stream(
-        {"messages": [{"role": "user", "content": question}]},
+        _agent_input(question, config),
         config={"configurable": {"thread_id": thread_id}},
         stream_mode="updates",
     ):

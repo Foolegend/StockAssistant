@@ -11,6 +11,7 @@ description: |
   触发场景：用户提供股票代码要求分析、问某只股票怎么样、要求看盘分析等。
   示例输入：「分析下 TSLA PLTR」「600519怎么样」「帮我看看HK00700」
   不适用于大盘/市场全景、今日市场主要因素、市场情绪与周期评估（那属于 market-cycle-assessment）。
+  不适用于企业财报/年报/基本面分析、盈利质量与财务风险判断（那属于 enterprise-statement-analysis）。
 allowed-tools: Read Write Bash WebSearch
 metadata:
   trigger: 当用户提供股票代码要求分析，或问某只股票走势/建议时触发

@@ -372,6 +372,17 @@ def _run_agent_chat(
     if was_stopped():
         return None
 
+    # Pin only the router's direct skill choices, not their dependencies such
+    # as pdf/xlsx.  The selected SKILL.md body is injected before the first
+    # model call, so an old thread's workflow cannot silently take over.
+    pinned_skill_names = [
+        extension_registry.skills[skill_id]["name"]
+        for skill_id in (selection.skill_ids or [])
+        if skill_id in extension_registry.skills
+    ]
+    if pinned_skill_names:
+        logger.info("routing pinned skills=%s", pinned_skill_names)
+
     if selection.agent_id is not None:
         try:
             agent, command = extension_registry.resolve(
@@ -394,6 +405,7 @@ def _run_agent_chat(
             command,
             _system_prompt_with_preferences(),
             skill_ids=resolved.skill_ids,
+            pinned_skills=pinned_skill_names,
             mcp_server_ids=resolved.mcp_server_ids,
             referenced_agent_ids=resolved.referenced_agent_ids,
         )
@@ -408,6 +420,7 @@ def _run_agent_chat(
             command,
             _system_prompt_with_preferences(),
             skill_ids=resolved.skill_ids,
+            pinned_skills=pinned_skill_names,
             mcp_server_ids=resolved.mcp_server_ids,
             referenced_agent_ids=resolved.referenced_agent_ids,
         )

@@ -23,6 +23,22 @@ _PROJECT_RUNTIME_GUIDANCE = """
 - Editor-specific tool and permission metadata are not security boundaries here; the runtime's actual server-side tools and workspace determine access.
 - Native editor settings, permissions, and memory files are not imported or executed. Hooks are loaded only from project `hooks` JSON files.
 """
+
+
+def _pinned_skills_guidance(pinned_skills: list[str] | None) -> str:
+    """Tell the model which router-selected skill must drive this request."""
+    if not pinned_skills:
+        return ""
+    names = "、".join(pinned_skills)
+    return (
+        "\n\n## 已选择技能（必须遵守）\n"
+        f"本次请求由路由选择了：{names}。\n"
+        "对应技能的 SKILL.md 已注入本次对话（若尚未看到，先读取它）。"
+        "严格按其工作流和脚本执行；不要复用未选择技能的脚本路径，"
+        "也不要沿用旧会话中的其他分析流程。"
+    )
+
+
 def _read_markdown(path: Path) -> tuple[dict[str, Any], str]:
     content = path.read_text(encoding="utf-8-sig")
     if not content.startswith("---"):
@@ -571,6 +587,7 @@ class ExtensionRegistry:
         default_system_prompt: str = "",
         *,
         skill_ids: list[str] | None = None,
+        pinned_skills: list[str] | None = None,
         mcp_server_ids: list[str] | None = None,
         referenced_agent_ids: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -618,11 +635,13 @@ class ExtensionRegistry:
             if skill["directory_name"] not in directories:
                 directories.append(skill["directory_name"])
 
+        system_prompt = f"{system_prompt}{_pinned_skills_guidance(pinned_skills)}".strip()
         return {
             "model_name": agent.get("model") if agent.get("source_type") != "project" else None,
             "skill_dirs": skill_dirs,
             "selected_skill_ids": selected_skill_ids,
             "selected_skill_directories": selected_skill_directories,
+            "pinned_skills": list(pinned_skills or []),
             "mcp_servers": [self.mcp_servers[server_id] for server_id in selected_mcp_server_ids],
             "hooks": self.hooks,
             "system_prompt": system_prompt,
@@ -636,6 +655,7 @@ class ExtensionRegistry:
         default_system_prompt: str = "",
         *,
         skill_ids: list[str] | None = None,
+        pinned_skills: list[str] | None = None,
         mcp_server_ids: list[str] | None = None,
         referenced_agent_ids: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -675,11 +695,13 @@ class ExtensionRegistry:
             if skill["directory_name"] not in directories:
                 directories.append(skill["directory_name"])
 
+        system_prompt = f"{system_prompt}{_pinned_skills_guidance(pinned_skills)}".strip()
         return {
             "model_name": None,
             "skill_dirs": skill_dirs,
             "selected_skill_ids": selected_skill_ids,
             "selected_skill_directories": selected_skill_directories,
+            "pinned_skills": list(pinned_skills or []),
             "mcp_servers": [self.mcp_servers[server_id] for server_id in selected_mcp_server_ids],
             "hooks": self.hooks,
             "system_prompt": system_prompt,
