@@ -760,11 +760,7 @@ class ExtensionRegistryTests(unittest.TestCase):
             [agent["id"] for agent in catalog["agents"]],
             ["stock-analyst"],
         )
-        self.assertEqual(
-            [command["id"] for command in catalog["commands"]],
-            ["analyze-stock"],
-        )
-        self.assertEqual(catalog["commands"][0]["name"], "/analyze-stock")
+        self.assertEqual(catalog["commands"], [])
         self.assertEqual(list(registry.mcp_servers), ["sequential-thinking"])
         self.assertEqual(len(registry.hooks), 1)
         stock_data_hook = next(iter(registry.hooks.values()))
@@ -888,38 +884,6 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in run_hook.call_args_list],
             ["before_agent", "after_agent"],
-        )
-
-    def test_stock_analysis_command_loads_skill_and_passes_user_request(self):
-        request = AgentChatRequest(question="/analyze-stock TSLA")
-        selection = ComponentSelection(
-            agent_id="stock-analyst",
-            command_id="analyze-stock",
-            skill_ids=[],
-            mcp_server_ids=[],
-        )
-        resolved = ResolvedComponents(
-            command_ids=["analyze-stock"],
-            skill_ids=["stock-analysis"],
-            mcp_server_ids=[],
-            referenced_agent_ids=[],
-        )
-
-        with patch("src.api.chat.select_components", return_value=selection), patch(
-            "src.api.chat.resolve_component_dependencies",
-            return_value=resolved,
-        ), patch("src.api.chat.make_llm", return_value=object()), patch(
-            "src.api.chat.ask_agent", return_value="分析完成"
-        ) as ask_agent, patch("src.api.chat.hook_runner.run"):
-            response = agent_chat(request)
-
-        self.assertEqual(response["data"]["command_id"], "analyze-stock")
-        self.assertEqual(response["data"]["skills"][0]["id"], "stock-analysis")
-        self.assertIn("@skill:stock-analysis", ask_agent.call_args.args[0])
-        self.assertIn("/analyze-stock TSLA", ask_agent.call_args.args[0])
-        self.assertEqual(
-            ask_agent.call_args.kwargs["config"].selected_skill_ids,
-            ["stock-analysis"],
         )
 
     def test_api_answers_greeting_with_model_without_routing(self):
