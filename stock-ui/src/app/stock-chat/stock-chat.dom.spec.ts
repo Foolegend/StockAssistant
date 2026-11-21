@@ -9,6 +9,7 @@ describe('StockChatComponent delete UI', () => {
 
   beforeEach(async () => {
     localStorage.removeItem('stock-assistant-conversations-v1');
+    localStorage.removeItem('stock-assistant-conversation-order-v1');
     await TestBed.configureTestingModule({
       imports: [StockChatComponent],
       providers: [provideZonelessChangeDetection()],

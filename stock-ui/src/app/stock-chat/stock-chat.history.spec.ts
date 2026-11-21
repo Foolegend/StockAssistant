@@ -16,6 +16,7 @@ describe('StockChatComponent server history', () => {
 
   beforeEach(async () => {
     localStorage.removeItem('stock-assistant-conversations-v1');
+    localStorage.removeItem('stock-assistant-conversation-order-v1');
     await TestBed.configureTestingModule({
       imports: [StockChatComponent],
       providers: [provideZonelessChangeDetection()],
@@ -222,6 +223,91 @@ describe('StockChatComponent server history', () => {
     await fixture.whenStable();
 
     expect(component.apiError).toBe('导出服务不可用');
+  });
+
+  describe('manual ordering', () => {
+    const orderKey = 'stock-assistant-conversation-order-v1';
+    const stub = (threadId: string, updatedAt = 0) => ({
+      threadId,
+      title: threadId,
+      updatedAt,
+      messages: [],
+      remote: true,
+    });
+    const dragEvent = () =>
+      ({ preventDefault: () => {}, dataTransfer: null }) as unknown as DragEvent;
+    const savedOrder = () =>
+      JSON.parse(localStorage.getItem(orderKey) ?? '[]') as string[];
+
+    it('moves a conversation when it is dropped on another', () => {
+      const a = stub('a');
+      const b = stub('b');
+      const c = stub('c');
+      component.conversations = [a, b, c];
+
+      component.onDragStart(a, dragEvent());
+      component.onDrop(dragEvent(), c);
+
+      expect(component.conversations.map((item) => item.threadId)).toEqual([
+        'b',
+        'a',
+        'c',
+      ]);
+      expect(savedOrder()).toEqual(['b', 'a', 'c']);
+    });
+
+    it('restores the saved order on load', async () => {
+      localStorage.setItem(
+        'stock-assistant-conversations-v1',
+        JSON.stringify([
+          { threadId: 'a', title: 'A', updatedAt: 1, messages: [{ id: '1', role: 'user', content: 'a' }] },
+          { threadId: 'b', title: 'B', updatedAt: 2, messages: [{ id: '2', role: 'user', content: 'b' }] },
+          { threadId: 'c', title: 'C', updatedAt: 3, messages: [{ id: '3', role: 'user', content: 'c' }] },
+        ]),
+      );
+      localStorage.setItem(orderKey, JSON.stringify(['c', 'b', 'a']));
+
+      const fresh = TestBed.createComponent(StockChatComponent);
+      fresh.detectChanges();
+      await fresh.whenStable();
+
+      expect(fresh.componentInstance.conversations.map((item) => item.threadId)).toEqual([
+        'c',
+        'b',
+        'a',
+      ]);
+    });
+
+    it('keeps the position of an existing conversation when it updates', () => {
+      type SaveFn = (conversation: {
+        threadId: string;
+        title: string;
+        updatedAt: number;
+        messages: Array<{ id: string; role: 'user'; content: string }>;
+      }) => void;
+      const save = (
+        component as unknown as { saveConversation: SaveFn }
+      ).saveConversation.bind(component);
+
+      save({ threadId: 'a', title: 'A', updatedAt: 1, messages: [{ id: 'a1', role: 'user', content: 'a' }] });
+      save({ threadId: 'b', title: 'B', updatedAt: 2, messages: [{ id: 'b1', role: 'user', content: 'b' }] });
+      expect(component.conversations.map((item) => item.threadId)).toEqual(['b', 'a']);
+
+      // A gets a newer timestamp but must not jump to the top.
+      save({ threadId: 'a', title: 'A', updatedAt: 99, messages: [{ id: 'a2', role: 'user', content: 'a2' }] });
+      expect(component.conversations.map((item) => item.threadId)).toEqual(['b', 'a']);
+    });
+
+    it('drops a deleted conversation from the saved order', () => {
+      const a = stub('a', 1);
+      const b = stub('b', 2);
+      component.conversations = [a, b];
+      (component as unknown as { saveOrder: () => void }).saveOrder();
+
+      component.deleteConversation(a);
+
+      expect(savedOrder()).toEqual(['b']);
+    });
   });
 
   it('does not delete server conversations when the local cache evicts them', () => {

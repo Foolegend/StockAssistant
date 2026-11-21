@@ -90,6 +90,8 @@ export class StockChatComponent {
 
   exportingAll = false;
   exportingConversationId: string | null = null;
+  draggedThreadId: string | null = null;
+  dragOverThreadId: string | null = null;
 
   preferences: UserPreference[] = [];
   preferencesOpen = false;
@@ -103,13 +105,14 @@ export class StockChatComponent {
   private abortController?: AbortController;
   private activeRunId?: string;
   private readonly storageKey = 'stock-assistant-conversations-v1';
+  private readonly orderKey = 'stock-assistant-conversation-order-v1';
   /** Conversations whose full message history is cached locally. */
   private readonly maxCachedConversations = 30;
   /** Upper bound for the sidebar list, including server-only entries. */
   private readonly maxListedConversations = 100;
 
   constructor(private cdr: ChangeDetectorRef) {
-    this.conversations = this.loadConversations();
+    this.conversations = this.applyOrder(this.loadConversations());
     this.currentConversation = this.createConversation();
     void this.syncFromServer();
   }
@@ -172,6 +175,7 @@ export class StockChatComponent {
       this.agentStatus = '';
     }
     this.persistConversations();
+    this.saveOrder();
     this.cdr.detectChanges();
     void this.releaseThreadOnServer(conversation.threadId);
   }
@@ -187,10 +191,74 @@ export class StockChatComponent {
     this.apiError = null;
     this.agentStatus = '';
     this.persistConversations();
+    this.saveOrder();
     this.cdr.detectChanges();
     for (const threadId of threadIds) {
       void this.releaseThreadOnServer(threadId);
     }
+  }
+
+  onDragStart(conversation: ChatConversation, event: DragEvent): void {
+    if (this.isLoading) {
+      event.preventDefault();
+      return;
+    }
+    this.draggedThreadId = conversation.threadId;
+    this.dragOverThreadId = null;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', conversation.threadId);
+    }
+  }
+
+  onDragOver(event: DragEvent, conversation: ChatConversation): void {
+    if (!this.draggedThreadId || this.draggedThreadId === conversation.threadId) {
+      return;
+    }
+    // Preventing the default is what makes the element a valid drop target.
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+    this.dragOverThreadId = conversation.threadId;
+  }
+
+  onDragLeave(conversation: ChatConversation): void {
+    if (this.dragOverThreadId === conversation.threadId) {
+      this.dragOverThreadId = null;
+    }
+  }
+
+  onDrop(event: DragEvent, target: ChatConversation): void {
+    event.preventDefault();
+    const sourceId = this.draggedThreadId;
+    this.draggedThreadId = null;
+    this.dragOverThreadId = null;
+    if (!sourceId || sourceId === target.threadId) {
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const list = [...this.conversations];
+    const from = list.findIndex((item) => item.threadId === sourceId);
+    const to = list.findIndex((item) => item.threadId === target.threadId);
+    if (from < 0 || to < 0) {
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const [moved] = list.splice(from, 1);
+    // Dropping above the target places the item before it.
+    list.splice(from < to ? to - 1 : to, 0, moved);
+    this.conversations = list;
+    this.saveOrder();
+    this.cdr.detectChanges();
+  }
+
+  onDragEnd(): void {
+    this.draggedThreadId = null;
+    this.dragOverThreadId = null;
+    this.cdr.detectChanges();
   }
 
   confirmClearAll(): void {
@@ -710,10 +778,10 @@ export class StockChatComponent {
     if (!conversation.messages.length) {
       return;
     }
-    const merged = [
+    const merged = this.applyOrder([
       conversation,
       ...this.conversations.filter((item) => item.threadId !== conversation.threadId),
-    ].sort((left, right) => right.updatedAt - left.updatedAt);
+    ]);
 
     // Only a bounded number of conversations keep their messages locally; the
     // rest stay in the sidebar as server-backed entries and load on demand.
@@ -730,6 +798,57 @@ export class StockChatComponent {
       return { ...item, messages: [], remote: true };
     });
     this.persistConversations();
+    this.saveOrder();
+  }
+
+  private loadOrder(): string[] {
+    try {
+      const raw = localStorage.getItem(this.orderKey);
+      if (!raw) {
+        return [];
+      }
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private saveOrder(): void {
+    try {
+      localStorage.setItem(
+        this.orderKey,
+        JSON.stringify(
+          this.conversations
+            .slice(0, this.maxListedConversations)
+            .map((item) => item.threadId),
+        ),
+      );
+    } catch {
+      // Ordering is a preference; failing to store it must not break the UI.
+    }
+  }
+
+  /**
+   * Put the list in the user's saved order.
+   *
+   * Threads with a saved position keep it, so an older conversation that
+   * receives a new message does not jump to the top. Threads that are not in
+   * the saved order (new conversations, history discovered from the server)
+   * go first, newest first, until the user drags them.
+   */
+  private applyOrder(list: ChatConversation[]): ChatConversation[] {
+    const order = this.loadOrder();
+    const rank = new Map(order.map((threadId, index) => [threadId, index]));
+    const known = list
+      .filter((item) => rank.has(item.threadId))
+      .sort((left, right) => (rank.get(left.threadId) ?? 0) - (rank.get(right.threadId) ?? 0));
+    const unknown = list
+      .filter((item) => !rank.has(item.threadId))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+    return [...unknown, ...known];
   }
 
   /** Merge the server's conversation list into the local one. */
@@ -784,10 +903,12 @@ export class StockChatComponent {
         }
       }
 
-      this.conversations = Array.from(byId.values())
-        .sort((left, right) => right.updatedAt - left.updatedAt)
-        .slice(0, this.maxListedConversations);
+      this.conversations = this.applyOrder(Array.from(byId.values())).slice(
+        0,
+        this.maxListedConversations,
+      );
       this.persistConversations();
+      this.saveOrder();
       this.cdr.detectChanges();
     } catch {
       // Offline, backend down, or no server history yet: local history still

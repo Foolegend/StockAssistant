@@ -22,7 +22,16 @@
           *ngFor="let conversation of conversations"
           class="conversation-item"
           [class.selected]="conversation.threadId === currentConversation.threadId"
+          [class.dragging]="draggedThreadId === conversation.threadId"
+          [class.drag-over]="dragOverThreadId === conversation.threadId"
+          draggable="true"
+          (dragstart)="onDragStart(conversation, $event)"
+          (dragover)="onDragOver($event, conversation)"
+          (dragleave)="onDragLeave(conversation)"
+          (drop)="onDrop($event, conversation)"
+          (dragend)="onDragEnd()"
         >
+          <span class="conversation-drag" title="拖动调整顺序" aria-hidden="true">⠿</span>
           <button
             class="conversation-link"
             type="button"
