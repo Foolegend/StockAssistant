@@ -1,0 +1,83 @@
+:host {
+  display: block;
+  height: 100dvh;
+  background: #0b0f14;
+  color: #d7dde8;
+}
+
+:host(.embedded-terminal) {
+  height: 100%;
+}
+
+.terminal-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #1f2937;
+  background: #0f1722;
+  font-size: 13px;
+}
+
+.terminal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  flex: none;
+}
+
+.dot.online {
+  background: #22c55e;
+}
+
+.terminal-status {
+  color: #94a3b8;
+}
+
+.terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hint {
+  color: #64748b;
+  font-size: 12px;
+}
+
+button {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #273449;
+}
+
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+}
+
+.terminal-host ::ng-deep .xterm {
+  height: 100%;
+}

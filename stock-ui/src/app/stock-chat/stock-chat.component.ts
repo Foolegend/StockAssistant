@@ -3,6 +3,7 @@ import {
   ChangeDetectorRef,
   Component,
   ElementRef,
+  OnDestroy,
   ViewChild,
 } from '@angular/core';
 
@@ -15,7 +16,7 @@ import {
   UsageInfo,
 } from '../extensions/capabilities.types';
 import { CapabilitiesDialogComponent } from '../extensions/capabilities-dialog.component';
-import { MarkdownPipe } from '../shared/markdown.pipe';
+import { TerminalComponent } from '../terminal/terminal.component';
 
 interface SourceLink {
   title: string;
@@ -77,6 +78,14 @@ interface ChatConversation {
   messages: ChatMessage[];
   /** True when the messages live only on the server and load on demand. */
   remote?: boolean;
+}
+
+interface TerminalSessionSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  alive: boolean;
 }
 
 interface StreamEvent {
@@ -150,11 +159,15 @@ const TOOL_TARGET_KEYS = [
 
 @Component({
   selector: 'app-stock-chat',
-  imports: [FormsModule, MarkdownPipe, CapabilitiesDialogComponent],
+  imports: [
+    FormsModule,
+    CapabilitiesDialogComponent,
+    TerminalComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './stock-chat.component.html',
 })
-export class StockChatComponent {
+export class StockChatComponent implements OnDestroy {
   readonly suggestions = [
     '梳理今天影响市场的主要因素',
     '分析一只股票时，应该先看哪些指标？',
@@ -172,12 +185,16 @@ export class StockChatComponent {
 
   conversations: ChatConversation[] = [];
   currentConversation: ChatConversation;
+  activeSessionId: string | null = null;
   userQuestion = '';
   isLoading = false;
   conversationLoading = false;
   agentStatus = '';
   apiError: string | null = null;
   storageWarning: string | null = null;
+
+  private sessionPoll?: ReturnType<typeof setInterval>;
+  private sessionsLoading = false;
 
   exportingAll = false;
   exportingConversationId: string | null = null;
@@ -217,9 +234,16 @@ export class StockChatComponent {
   private readonly maxListedConversations = 100;
 
   constructor(private cdr: ChangeDetectorRef) {
-    this.conversations = this.applyOrder(this.loadConversations());
     this.currentConversation = this.createConversation();
-    void this.syncFromServer();
+    void this.loadTerminalSessions();
+    this.sessionPoll = setInterval(
+      () => void this.refreshTerminalSessions(),
+      15000,
+    );
+  }
+
+  ngOnDestroy(): void {
+    if (this.sessionPoll) clearInterval(this.sessionPoll);
   }
 
   get currentSources(): SourceLink[] {
@@ -317,64 +341,183 @@ export class StockChatComponent {
   }
 
   newChat(): void {
-    if (this.isLoading) {
-      return;
-    }
-    this.currentConversation = this.createConversation();
-    this.userQuestion = '';
-    this.apiError = null;
-    this.agentStatus = '';
+    if (this.sessionsLoading) return;
+    void this.createTerminalSession();
   }
 
   async openConversation(conversation: ChatConversation): Promise<void> {
-    if (this.isLoading || this.conversationLoading) {
-      return;
-    }
-    this.currentConversation = conversation;
-    this.userQuestion = '';
-    this.apiError = null;
-    this.agentStatus = '';
-
-    if (conversation.remote && !conversation.messages.length) {
-      await this.loadConversationMessages(conversation);
-    }
+    this.selectSession(conversation);
   }
 
   deleteConversation(conversation: ChatConversation): void {
-    if (this.isLoading) {
-      return;
-    }
-    this.conversations = this.conversations.filter(
-      (item) => item.threadId !== conversation.threadId,
-    );
-    if (this.currentConversation.threadId === conversation.threadId) {
-      this.currentConversation = this.createConversation();
-      this.userQuestion = '';
-      this.apiError = null;
-      this.agentStatus = '';
-    }
-    this.persistConversations();
-    this.saveOrder();
-    this.cdr.detectChanges();
-    void this.releaseThreadOnServer(conversation.threadId);
+    void this.deleteTerminalSession(conversation);
   }
 
   clearAllConversations(): void {
-    if (this.isLoading || !this.conversations.length) {
-      return;
+    void this.clearTerminalSessions();
+  }
+
+  private sessionToConversation(
+    session: TerminalSessionSummary,
+  ): ChatConversation {
+    return {
+      threadId: session.id,
+      title: session.title || '终端会话',
+      updatedAt: Date.parse(session.updated_at) || Date.now(),
+      messages: [],
+      remote: true,
+    };
+  }
+
+  private async fetchTerminalSessions(): Promise<TerminalSessionSummary[]> {
+    const response = await fetch(`${this.apiBaseUrl}/sessions`);
+    if (!response.ok) {
+      throw new Error(await this.readError(response));
     }
-    const threadIds = this.conversations.map((item) => item.threadId);
-    this.conversations = [];
-    this.currentConversation = this.createConversation();
+    const body = (await response.json()) as {
+      sessions?: TerminalSessionSummary[];
+    };
+    return Array.isArray(body.sessions) ? body.sessions : [];
+  }
+
+  private applySessions(sessions: TerminalSessionSummary[]): void {
+    const activeId = this.activeSessionId;
+    this.conversations = this.applyOrder(
+      sessions.map((session) => this.sessionToConversation(session)),
+    );
+
+    const active = activeId
+      ? this.conversations.find((item) => item.threadId === activeId)
+      : undefined;
+    if (active) {
+      this.currentConversation = active;
+    } else if (this.conversations.length) {
+      this.selectSession(this.conversations[0]);
+    } else {
+      this.activeSessionId = null;
+      this.currentConversation = this.createConversation();
+    }
+    this.cdr.markForCheck();
+  }
+
+  private async loadTerminalSessions(): Promise<void> {
+    try {
+      const sessions = await this.fetchTerminalSessions();
+      if (!sessions.length) {
+        await this.createTerminalSession();
+        return;
+      }
+      this.applySessions(sessions);
+    } catch {
+      this.apiError = '无法连接终端服务，请确认后端已启动';
+      this.cdr.markForCheck();
+    }
+  }
+
+  private async refreshTerminalSessions(): Promise<void> {
+    try {
+      this.applySessions(await this.fetchTerminalSessions());
+    } catch {
+      // Transient polling failure: keep the current list.
+    }
+  }
+
+  private async createTerminalSession(): Promise<void> {
+    if (this.sessionsLoading) return;
+    this.sessionsLoading = true;
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/sessions`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      const body = (await response.json()) as {
+        session?: TerminalSessionSummary;
+      };
+      if (!body.session) throw new Error('创建终端会话失败');
+      const conversation = this.sessionToConversation(body.session);
+      this.conversations = [
+        conversation,
+        ...this.conversations.filter(
+          (item) => item.threadId !== conversation.threadId,
+        ),
+      ];
+      this.selectSession(conversation);
+    } catch (error) {
+      this.apiError =
+        error instanceof Error ? error.message : '创建终端会话失败';
+    } finally {
+      this.sessionsLoading = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  private selectSession(conversation: ChatConversation): void {
+    this.currentConversation = conversation;
+    this.activeSessionId = conversation.threadId;
     this.userQuestion = '';
     this.apiError = null;
     this.agentStatus = '';
-    this.persistConversations();
-    this.saveOrder();
-    this.cdr.detectChanges();
-    for (const threadId of threadIds) {
-      void this.releaseThreadOnServer(threadId);
+    this.cdr.markForCheck();
+  }
+
+  private async deleteTerminalSession(
+    conversation: ChatConversation,
+  ): Promise<void> {
+    const id = conversation.threadId;
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/sessions/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+      );
+      if (!response.ok && response.status !== 404) {
+        throw new Error(await this.readError(response));
+      }
+    } catch (error) {
+      this.apiError =
+        error instanceof Error ? error.message : '删除终端会话失败';
+      this.cdr.markForCheck();
+      return;
     }
+
+    this.conversations = this.conversations.filter(
+      (item) => item.threadId !== id,
+    );
+    if (this.activeSessionId === id) {
+      this.activeSessionId = null;
+      this.currentConversation = this.createConversation();
+      if (this.conversations.length) {
+        this.selectSession(this.conversations[0]);
+      } else {
+        await this.createTerminalSession();
+      }
+    }
+    this.saveOrder();
+    this.cdr.markForCheck();
+  }
+
+  private async clearTerminalSessions(): Promise<void> {
+    if (!this.conversations.length) return;
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/sessions`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+    } catch (error) {
+      this.apiError =
+        error instanceof Error ? error.message : '清空终端会话失败';
+      this.cdr.markForCheck();
+      return;
+    }
+    this.conversations = [];
+    this.activeSessionId = null;
+    this.currentConversation = this.createConversation();
+    this.saveOrder();
+    await this.createTerminalSession();
+    this.cdr.markForCheck();
   }
 
   onDragStart(conversation: ChatConversation, event: DragEvent): void {
@@ -441,60 +584,42 @@ export class StockChatComponent {
   }
 
   confirmClearAll(): void {
-    if (this.isLoading || !this.conversations.length) {
-      return;
-    }
-    if (!window.confirm(`确定清空全部 ${this.conversations.length} 条会话记录吗？此操作无法撤销。`)) {
+    if (!this.conversations.length) return;
+    if (
+      !window.confirm(
+        `确定删除全部 ${this.conversations.length} 个终端会话吗？此操作会终止对应 CLI 进程。`,
+      )
+    ) {
       return;
     }
     this.clearAllConversations();
   }
 
   async exportConversation(conversation: ChatConversation): Promise<void> {
-    const hasLocal = conversation.messages.length > 0;
-    if (
-      this.isLoading ||
-      this.exportingConversationId ||
-      (!hasLocal && !conversation.remote)
-    ) {
-      return;
-    }
+    if (this.exportingConversationId) return;
 
     this.exportingConversationId = conversation.threadId;
     this.apiError = null;
-    this.cdr.detectChanges();
+    this.cdr.markForCheck();
     try {
-      // The server has the authoritative record; fall back to the local copy
-      // when it is unavailable (offline, expired, or never persisted).
       const response = await fetch(
-        `${this.apiBaseUrl}/agent/threads/${encodeURIComponent(conversation.threadId)}/export?format=markdown`,
+        `${this.apiBaseUrl}/sessions/${encodeURIComponent(conversation.threadId)}/output`,
       );
-      if (response.ok) {
-        const body = await response.text();
-        this.downloadText(
-          body,
-          `${this.safeFileName(conversation.title)}.md`,
-        );
-        return;
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
       }
-      if (!hasLocal) {
-        this.apiError =
-          response.status === 404
-            ? '该会话没有可导出的记录'
-            : await this.readError(response);
-        return;
-      }
-    } catch {
-      if (!hasLocal) {
-        this.apiError = '导出失败，请稍后重试';
-        return;
-      }
+      const body = await response.text();
+      this.downloadText(
+        body,
+        `${this.safeFileName(conversation.title)}.txt`,
+      );
+    } catch (error) {
+      this.apiError =
+        error instanceof Error ? error.message : '导出终端会话失败';
     } finally {
       this.exportingConversationId = null;
-      this.cdr.detectChanges();
+      this.cdr.markForCheck();
     }
-
-    this.exportLocalConversation(conversation);
   }
 
   private exportLocalConversation(conversation: ChatConversation): void {
@@ -534,30 +659,26 @@ export class StockChatComponent {
     );
   }
 
-  /** Export every stored conversation in one Markdown file. */
+  /** Export every terminal session output in one Markdown file. */
   async exportAllConversations(): Promise<void> {
-    if (this.exportingAll || !this.conversations.length) {
-      return;
-    }
+    if (this.exportingAll || !this.conversations.length) return;
     this.exportingAll = true;
     this.apiError = null;
-    this.cdr.detectChanges();
+    this.cdr.markForCheck();
     try {
-      const response = await fetch(
-        `${this.apiBaseUrl}/agent/threads/export?format=markdown`,
-      );
+      const response = await fetch(`${this.apiBaseUrl}/sessions/export`);
       if (!response.ok) {
         throw new Error(await this.readError(response));
       }
       const body = await response.text();
       const stamp = new Date().toISOString().slice(0, 10);
-      this.downloadText(body, `conversations-${stamp}.md`);
+      this.downloadText(body, `terminal-sessions-${stamp}.md`);
     } catch (error: unknown) {
       this.apiError =
         error instanceof Error ? error.message : '批量导出失败';
     } finally {
       this.exportingAll = false;
-      this.cdr.detectChanges();
+      this.cdr.markForCheck();
     }
   }
 

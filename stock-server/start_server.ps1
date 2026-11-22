@@ -1,86 +1,70 @@
-﻿# 设置编码，防止中文乱码（控制台与 Python 输出都统一为 UTF-8）
+# StockAssistant 后端启动脚本（Windows）
+#
+# 启动 Bun 编写的 HTTP/SSE API 服务，监听 127.0.0.1:8015。
+# 智能分析由 stock-server/src 中的 StockAssistant CLI 实现。
+$ErrorActionPreference = 'Stop'
+
 chcp 65001 > $null
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$env:PYTHONUTF8 = "1"
-$env:PYTHONIOENCODING = "utf-8"
 
-# 日志只写入 logs\stock-server.log，不在控制台刷屏
-# 需要临时查看控制台日志时先设置 $env:STOCK_LOG_CONSOLE = "1"
-if ([string]::IsNullOrEmpty($env:STOCK_LOG_CONSOLE)) { $env:STOCK_LOG_CONSOLE = "0" }
+$BackRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$Port = if ($env:INVEST_SERVER_PORT) { [int]$env:INVEST_SERVER_PORT } else { 8015 }
+$ServerHost = if ($env:INVEST_SERVER_HOST) { $env:INVEST_SERVER_HOST } else { '127.0.0.1' }
 
-# 1. 获取当前脚本所在目录 (d:\project\StockAssistant\stock-server)
-$BACK_ROOT = $PSScriptRoot
-
-# 2. 设置 PYTHONPATH，确保 python 能找到 src 包
-$env:PYTHONPATH = $BACK_ROOT
-
-# 3. 定义虚拟环境中的 python 路径 (相对于项目根目录)
-$PROJECT_ROOT = Split-Path -Parent $BACK_ROOT
-$PYTHON_EXE = Join-Path $PROJECT_ROOT ".venv\Scripts\python.exe"
-$REQ_FILE = Join-Path $BACK_ROOT "requirements.txt"
-
-if (-not (Test-Path $PYTHON_EXE)) {
-    Write-Host "📦 未找到虚拟环境，正在创建..." -ForegroundColor Yellow
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        & py -3 -m venv (Join-Path $PROJECT_ROOT ".venv")
+function Resolve-BunExe {
+    if ($env:INVESTAI_BUN -and (Test-Path $env:INVESTAI_BUN)) { return $env:INVESTAI_BUN }
+    $candidates = @(
+        (Join-Path $env:APPDATA 'npm\node_modules\bun\bin\bun.exe'),
+        (Join-Path $env:USERPROFILE '.bun\bin\bun.exe')
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) { return $candidate }
     }
-    elseif (Get-Command python -ErrorAction SilentlyContinue) {
-        & python -m venv (Join-Path $PROJECT_ROOT ".venv")
-    }
-    else {
-        Write-Host "❌ 未找到 Python，请先安装 Python 3.12+" -ForegroundColor Red
-        exit 1
-    }
-    if (-not (Test-Path $PYTHON_EXE)) {
-        Write-Host "❌ 创建虚拟环境失败，请检查 Python 安装" -ForegroundColor Red
-        exit 1
-    }
+    $command = Get-Command bun -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    return $null
 }
 
-# 4. 依赖缺失时根据 requirements.txt 自动安装
-& $PYTHON_EXE -c "import uvicorn, fastapi, langchain, langgraph, deepagents" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    if (-not (Test-Path $REQ_FILE)) {
-        Write-Host "❌ 当前 Python 环境缺少依赖，且未找到 $REQ_FILE" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "📦 检测到依赖缺失，正在安装 requirements.txt ..." -ForegroundColor Yellow
-    & $PYTHON_EXE -m pip install -r $REQ_FILE
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "❌ 依赖安装失败，请检查网络或手动执行：" -ForegroundColor Red
-        Write-Host "   $PYTHON_EXE -m pip install -r $REQ_FILE" -ForegroundColor Yellow
-        exit 1
-    }
-}
-
-# 4b. 校验 venv 与 requirements.txt 是否一致
-#     venv 一旦建好就不会再更新，导致运行时依赖和仓库声明长期脱节。
-#     ensure_env.py 记录 requirements.txt 的哈希，不一致时自动重装依赖。
-Write-Host "🔍 校验虚拟环境与依赖清单..." -ForegroundColor Gray
-& $PYTHON_EXE "$BACK_ROOT\scripts\ensure_env.py"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ 依赖同步失败，请手动执行：" -ForegroundColor Red
-    Write-Host "   $PYTHON_EXE -m pip install -r $REQ_FILE" -ForegroundColor Red
+$bun = Resolve-BunExe
+if (-not $bun) {
+    Write-Host '❌ 未找到 Bun，请先安装：https://bun.sh' -ForegroundColor Red
     exit 1
 }
 
-# --- 新增：强制释放 8015 端口 ---
-Write-Host "🔍 检查并清理端口 8015..." -ForegroundColor Gray
-$proc = Get-NetTCPConnection -LocalPort 8015 -ErrorAction SilentlyContinue
-if ($proc) {
-    Write-Host "Stopping existing process on port 8015 (PID: $($proc.OwningProcess))..." -ForegroundColor Yellow
-    Stop-Process -Id $proc.OwningProcess -Force -ErrorAction SilentlyContinue
+if (-not (Test-Path (Join-Path $BackRoot 'node_modules'))) {
+    Write-Host '📦 未检测到依赖，正在执行 bun install ...' -ForegroundColor Yellow
+    Push-Location $BackRoot
+    try {
+        & $bun install
+        if ($LASTEXITCODE -ne 0) {
+            throw "bun install 失败 (exit $LASTEXITCODE)"
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
-# -----------------------------
 
-# 5. 启动 Uvicorn 服务
-Write-Host "--------------------------------------------------" -ForegroundColor Cyan
-Write-Host "🚀 正在启动 StockAssistant 后端服务..." -ForegroundColor Cyan
-Write-Host "端口: http://127.0.0.1:8015" -ForegroundColor Yellow
-Write-Host "API 文档: http://127.0.0.1:8015/docs" -ForegroundColor Yellow
-Write-Host "日志文件: $BACK_ROOT\logs\stock-server.log" -ForegroundColor Yellow
-Write-Host "--------------------------------------------------" -ForegroundColor Cyan
+# 释放占用端口的旧进程（如果存在）
+$existing = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+if ($existing) {
+    Write-Host "⚠️  端口 $Port 已被占用，正在释放 ..." -ForegroundColor Yellow
+    $existing | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
+        & taskkill /PID $_ /T /F *> $null
+    }
+    Start-Sleep -Milliseconds 300
+}
 
-# --no-access-log: 请求日志由应用的请求中间件统一输出（带 request id 与耗时）
-& $PYTHON_EXE -m uvicorn src.api.chat:app --host 127.0.0.1 --port 8015 --no-access-log
+$env:INVEST_SERVER_PORT = "$Port"
+$env:INVEST_SERVER_HOST = $ServerHost
+
+Push-Location $BackRoot
+try {
+    Write-Host "▶️  StockAssistant 后端启动中：http://$ServerHost`:$Port" -ForegroundColor Cyan
+    & $bun run terminal/server.ts
+    exit $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}

@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "ignoreDeprecations": "6.0",
+    "paths": {
+      "src/*": ["./src/*"],
+      "cc-feature": ["./compat/feature.ts"],
+      "color-diff-napi": ["./compat/stubs/color-diff-napi.ts"],
+      "image-processor-napi": ["./compat/stubs/image-processor-napi.ts"],
+      "audio-capture-napi": ["./compat/stubs/audio-capture-napi.ts"],
+      "url-handler-napi": ["./compat/stubs/url-handler-napi.ts"],
+      "modifiers-napi": ["./compat/stubs/modifiers-napi.ts"],
+      "@ant/computer-use-mcp": ["./compat/stubs/computer-use-mcp.ts"],
+      "@ant/computer-use-mcp/types": ["./compat/stubs/computer-use-mcp-types.ts"],
+      "@ant/computer-use-mcp/sentinelApps": ["./compat/stubs/computer-use-sentinel.ts"],
+      "@ant/computer-use-input": ["./compat/stubs/computer-use-input.ts"],
+      "@ant/computer-use-swift": ["./compat/stubs/computer-use-swift.ts"],
+      "@ant/stock-for-chrome-mcp": ["./compat/stubs/stock-for-chrome-mcp.ts"]
+    }
+  },
+  "include": ["src/**/*", "compat/**/*", "lib/**/*", "terminal/**/*"]
+}

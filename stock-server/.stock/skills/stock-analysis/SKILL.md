@@ -77,7 +77,7 @@ metadata:
 - 港股: efinance → akshare → yfinance
 - 美股: yfinance → tencent（Yahoo 限流 429 时自动回退，无需 Key）
 
-**新闻降级链**：Tavily → SerpAPI → Claude WebSearch（兜底）
+**新闻降级链**：Tavily → SerpAPI → StockAssistant WebSearch（兜底）
 
 ## STEP 2: 运行数据脚本
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Stock Data Fetcher + Technical Indicator Calculator
-Outputs structured JSON for Claude Code analysis.
+Outputs structured JSON for StockAssistant analysis.
 No AI/LLM calls -- pure data + math.
 
 Data source priority (graceful degradation):
@@ -10,7 +10,7 @@ Data source priority (graceful degradation):
   US:      yfinance > tencent (fallback when Yahoo rate-limits)
 
 News search priority (via --news flag):
-  Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in Claude)
+  Tavily (if TAVILY_API_KEY set) > SerpAPI (if SERPAPI_KEY set) > skip (use WebSearch in StockAssistant)
 
 Usage:
     python3 stock_data_fetcher.py --stocks "600519,TSLA,HK00700" [--days 120] [--news]
@@ -604,7 +604,7 @@ def fetch_us(code: str, days: int) -> dict:
 
 def search_news(stock_name: str, code: str, max_results: int = 5) -> list:
     """
-    Search news with priority: Tavily > SerpAPI > empty (let Claude WebSearch).
+    Search news with priority: Tavily > SerpAPI > empty (let StockAssistant WebSearch).
     Returns list of {"title": ..., "content": ..., "url": ..., "date": ...}
     """
     # Priority 0: Tavily
@@ -655,8 +655,8 @@ def search_news(stock_name: str, code: str, max_results: int = 5) -> list:
         except Exception as e:
             _log(f"[{code}] SerpAPI failed: {e}")
 
-    # No API keys configured — return empty, let Claude use WebSearch
-    _log(f"[{code}] No news API configured, skipping (Claude will use WebSearch)")
+    # No API keys configured — return empty, let StockAssistant use WebSearch
+    _log(f"[{code}] No news API configured, skipping (StockAssistant will use WebSearch)")
     return []
 
 

@@ -1,0 +1,14 @@
+<section class="terminal-page">
+  <header class="terminal-bar">
+    <div class="terminal-title">
+      <span class="dot" [class.online]="connected()"></span>
+      <strong>StockAssistant 终端</strong>
+      <span class="terminal-status">{{ statusText() }}</span>
+    </div>
+    <div class="terminal-actions">
+      <span class="hint">直接与后端 CLI 交互；输入 /exit 退出</span>
+      <button type="button" (click)="reconnect()">重连</button>
+    </div>
+  </header>
+  <div #host class="terminal-host"></div>
+</section>

@@ -1,0 +1,16 @@
+# ReCode local database
+.recode
+
+# Local reconstruction
+node_modules/
+dist/
+.bun/
+
+# Local model credentials (never commit)
+.env
+.env.local
+.env.*.local
+
+# Python bytecode
+__pycache__/
+*.py[cod]

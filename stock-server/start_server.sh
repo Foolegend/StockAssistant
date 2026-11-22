@@ -1,104 +1,42 @@
 #!/usr/bin/env bash
 # StockAssistant 后端启动脚本（Linux / macOS）
+#
+# 启动 Bun 编写的 HTTP/SSE API 服务，监听 127.0.0.1:8015。
+# 智能分析由 stock-server/src 中的 StockAssistant CLI 实现。
 set -euo pipefail
 
-# 统一编码，避免中文日志乱码
-export PYTHONUTF8=1
-export PYTHONIOENCODING=utf-8
-
-# 日志只写入 logs/stock-server.log，不在控制台刷屏
-# 需要临时查看控制台日志时：STOCK_LOG_CONSOLE=1 ./start_server.sh
-export STOCK_LOG_CONSOLE="${STOCK_LOG_CONSOLE:-0}"
-
-PORT=8015
-HOST=127.0.0.1
-
-# 1. 脚本所在目录（stock-server）
 BACK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PORT="${INVEST_SERVER_PORT:-8015}"
+HOST="${INVEST_SERVER_HOST:-127.0.0.1}"
 
-# 2. 保证 python 能找到 src 包
-export PYTHONPATH="$BACK_ROOT"
-
-# 3. Python 解释器：优先用 STOCK_PYTHON 指定的路径，其次项目根目录的 .venv
-PROJECT_ROOT="$(dirname "$BACK_ROOT")"
-REQ_FILE="$BACK_ROOT/requirements.txt"
-
-if [[ -n "${STOCK_PYTHON:-}" ]]; then
-    PYTHON_EXE="$STOCK_PYTHON"
-    if [[ ! -x "$PYTHON_EXE" ]]; then
-        echo "❌ STOCK_PYTHON 指定的解释器不可执行: $PYTHON_EXE" >&2
-        exit 1
-    fi
+# --- Bun --------------------------------------------------------------------
+if [[ -n "${INVESTAI_BUN:-}" && -x "${INVESTAI_BUN}" ]]; then
+    BUN_EXE="${INVESTAI_BUN}"
+elif command -v bun >/dev/null 2>&1; then
+    BUN_EXE="$(command -v bun)"
+elif [[ -x "$HOME/.bun/bin/bun" ]]; then
+    BUN_EXE="$HOME/.bun/bin/bun"
 else
-    PYTHON_EXE="$PROJECT_ROOT/.venv/bin/python"
-    if [[ ! -x "$PYTHON_EXE" ]]; then
-        echo "📦 未找到虚拟环境 $PROJECT_ROOT/.venv，正在创建..."
-        if ! command -v python3 >/dev/null 2>&1; then
-            echo "❌ 未找到 python3，请先安装 Python 3.12+（或用 STOCK_PYTHON 指定解释器）" >&2
-            exit 1
-        fi
-        if ! python3 -m venv "$PROJECT_ROOT/.venv"; then
-            echo "❌ 创建虚拟环境失败，请确认已安装 python3-venv" >&2
-            exit 1
-        fi
-    fi
-fi
-
-# 4. 依赖缺失时根据 requirements.txt 自动安装
-if ! "$PYTHON_EXE" -c "import uvicorn, fastapi, langchain, langgraph, deepagents" >/dev/null 2>&1; then
-    if [[ ! -f "$REQ_FILE" ]]; then
-        echo "❌ 当前 Python 环境缺少依赖，且未找到 $REQ_FILE" >&2
-        exit 1
-    fi
-    echo "📦 检测到依赖缺失，正在安装 $REQ_FILE ..."
-    if ! "$PYTHON_EXE" -m pip install -r "$REQ_FILE"; then
-        echo "❌ 依赖安装失败，请检查网络或手动执行：" >&2
-        echo "   $PYTHON_EXE -m pip install -r $REQ_FILE" >&2
-        exit 1
-    fi
-fi
-
-# 5. 校验 venv 与 requirements.txt 是否一致
-#    venv 一旦建好就不会再更新，导致运行时依赖和仓库声明长期脱节。
-#    ensure_env.py 记录 requirements.txt 的哈希，不一致时自动重装依赖。
-echo "🔍 校验虚拟环境与依赖清单..."
-"$PYTHON_EXE" "$BACK_ROOT/scripts/ensure_env.py"
-if [[ $? -ne 0 ]]; then
-    echo "❌ 依赖同步失败，请手动执行：" >&2
-    echo "   \"$PYTHON_EXE\" -m pip install -r \"$REQ_FILE\"" >&2
+    echo "❌ 未找到 Bun，请先安装：https://bun.sh" >&2
     exit 1
 fi
 
-# 6. 检查并释放端口
-free_port() {
-    local port="$1" pids=""
-    if command -v lsof >/dev/null 2>&1; then
-        pids="$(lsof -ti "tcp:$port" 2>/dev/null || true)"
-    elif command -v fuser >/dev/null 2>&1; then
-        pids="$(fuser "$port/tcp" 2>/dev/null || true)"
-    elif command -v ss >/dev/null 2>&1; then
-        pids="$(ss -lptnH "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u || true)"
-    fi
-    if [[ -n "$pids" ]]; then
-        echo "⚠️  停止占用端口 $port 的进程 (PID: $pids)"
-        # shellcheck disable=SC2086
-        kill -9 $pids 2>/dev/null || true
-        sleep 1
-    fi
-}
+# --- 依赖 -------------------------------------------------------------------
+if [[ ! -d "$BACK_ROOT/node_modules" ]]; then
+    echo "📦 未检测到依赖，正在执行 bun install ..."
+    (cd "$BACK_ROOT" && "$BUN_EXE" install)
+fi
 
-echo "🔍 检查并清理端口 $PORT..."
-free_port "$PORT"
+# --- 端口 -------------------------------------------------------------------
+if command -v lsof >/dev/null 2>&1 && lsof -ti "tcp:$PORT" >/dev/null 2>&1; then
+    echo "⚠️  端口 $PORT 已被占用，正在尝试释放 ..." >&2
+    lsof -ti "tcp:$PORT" | xargs -r kill -9 || true
+    sleep 0.3
+fi
 
-# 7. 启动 Uvicorn 服务
-echo "--------------------------------------------------"
-echo "🚀 正在启动 StockAssistant 后端服务..."
-echo "端口:     http://$HOST:$PORT"
-echo "API 文档: http://$HOST:$PORT/docs"
-echo "日志文件: $BACK_ROOT/logs/stock-server.log"
-echo "--------------------------------------------------"
+export INVEST_SERVER_PORT="$PORT"
+export INVEST_SERVER_HOST="$HOST"
 
-# --no-access-log: 请求日志由应用的请求中间件统一输出（带 request id 与耗时）
 cd "$BACK_ROOT"
-exec "$PYTHON_EXE" -m uvicorn src.api.chat:app \
-    --host "$HOST" --port "$PORT" --no-access-log
+echo "▶️  StockAssistant 后端启动中：http://$HOST:$PORT"
+exec "$BUN_EXE" run terminal/server.ts

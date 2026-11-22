@@ -1,52 +1,81 @@
 # 📈 StockAssistant AI
 
-StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model Context Protocol) 工具的智能股票分析助手。它采用前后端分离架构，支持自定义大模型调用，旨在提供专业、结构化的股票数据分析与投资价值评估。
+StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP（Model Context Protocol）工具的智能股票分析助手。
+
+当前架构：**后端是 Bun 编写的 PTY + WebSocket 服务，把 StockAssistant CLI 的交互式命令行窗口直接暴露给浏览器；前端用 Angular + xterm.js 内嵌该终端。**
+
+> 原来的 HTTP/SSE 适配层（`stock-server/server/`）已移除。现在一个 WebSocket 连接对应一个 CLI 进程，终端输出原样送到前端；CLI 的 Ink 界面、工具调用、MCP、技能都在真实 PTY 中运行。
 
 ## 🛠️ 项目架构
 
-### 1. 后端 (stock-server)
-基于 **FastAPI** 构建，核心逻辑由 `UnifiedAgent` 驱动。
-- **Agent 核心**：从服务端扩展目录发现 Agent、Skills、Commands 和 MCP Servers；聊天界面提供“能力”面板与 `/` 斜杠命令，API 使用注册 ID 定位扩展。
-- **Brain 层**：提供多种 LLM 适配器（Ollama, OpenAI 等）。
-- **Skill 系统**：
-  - `stock-analysis`: 股票数据抓取与技术指标分析。
-  - `docx-cn`: Word 文档处理与红线比对。
-  - `weather`: 实时天气查询。
-  - `doc-handler`: 文档解析处理。
-- **MCP 集成**：通过 MCP 适配器扩展标准工具集。
+### 1. 后端（stock-server）
 
-### 2. 前端 (stock-ui)
-基于 **Angular** 构建的对话优先研究工作台。
-- **分析会话**：最近 30 条对话保存在当前浏览器本地。
-- **过程可见**：展示后端实际报告的分析状态、模型思考（模型返回 `<think>` 时）与工具调用（命令/参数/结果），并标注本次使用的 Agent、Command、Skill 与 MCP。
-- **能力可见**：顶栏“能力”面板按命令/技能/智能体/MCP/钩子分组展示，输入框键入 `/` 可搜索并插入命令或技能。
-- **依据可追溯**：列出回答中明确提供的网页链接；未附链接时明确提示来源未经核实。
-- **响应式设计**：在桌面端并列显示对话与依据面板，小屏幕下纵向排列。
+- **PTY + WebSocket 会话服务**：[terminal/server.ts](stock-server/terminal/server.ts)
+  - `Bun.serve` 监听 `127.0.0.1:8015`
+  - 每个**会话**拥有一个 `Bun.Terminal`（PTY）和一个 CLI 进程；WebSocket 只是附着/分离，断开连接不会终止 CLI
+  - 会话带输出缓冲区，重新附着时会先回放，再继续实时输出
+  - `GET /health` 返回 `{"ok":true}`
+- **CLI 引擎**：`src/entrypoints/cli.tsx`，以**交互模式**运行（不再使用 `-p` headless）
+- **启动参数注入**：[terminal/wiring.ts](stock-server/terminal/wiring.ts)
+  - `.stock/agents`、`.stock/skills`、`.stock/commands` → `--append-system-prompt`
+  - `.stock/mcp-configs/mcp-servers.json` → `--mcp-config`（绝对路径）
+  - `.stock/hooks/hooks.json` → `--settings`（替换 `${STOCK_PLUGIN_ROOT}`）
+  - `.env` 中的 `INVEST_*` 由 `compat/preload.ts` 映射为 `ANTHROPIC_*` / `STOCK_*`
+  - `--dangerously-skip-permissions`（仅限本机可信环境）
+- **扩展扫描**：[lib/catalog.ts](stock-server/lib/catalog.ts)，每次新建终端连接时重新扫描 `.stock`
 
----
+### 2. 前端（stock-ui）
 
-## 🧩 扩展智能体
+- **终端页面**：[terminal.component.ts](stock-ui/src/app/terminal/terminal.component.ts)，基于 **xterm.js**
+- 默认路由 `/` 重定向到 `/terminal`
+- WebSocket 连接：`ws://127.0.0.1:8015/terminal/ws?session=<id>&cols=...&rows=...`
+- 左侧会话栏来自服务端 `GET /sessions`：新建、切换、删除、导出都对应真实 PTY 会话
+- 切换会话会重连并回放该会话的输出；未选中的会话继续在服务端运行
+- 支持窗口自适应（FitAddon + ResizeObserver）、断线自动重连
+- 原聊天页保留在 `/chat`，但其 HTTP/SSE 后端已随 `server/` 一起移除，仅作参考
 
-- 仅扫描 `stock-server/.stock` 中的扩展，不加载工程根目录下的 `.github`、`.cursor`，也不读取外部目录或使用 `CLAUDE_CONFIG_DIR`。
-- `stock-server/.stock/agents/**/*.md`：自动发现 Agent，并注册为可选 Agent 和可委派子 Agent。
-- `stock-server/.stock/skills/**/SKILL.md`：递归发现 Skill，按 DeepAgents Skills middleware 加载；支持 Skill 子目录。
-- `stock-server/.stock/commands/**/*.md`：自动发现斜杠命令；子目录生成 `目录:名称` 命名空间（如 `reports/daily.md` → `/reports:daily`）。
-- `stock-server/.stock/hooks/hooks.json`：读取原生事件、matcher 和 command 定义；`stock-server/.stock/mcp-configs/mcp-servers.json`：读取 `mcpServers` 配置并注册 MCP server。
-- Hook 脚本和共享工具位于 `stock-server/.stock/hooks/scripts/`，由 Hook 配置调用。
+## 🔌 终端协议
 
-`GET /agent/catalog` 返回目录 v2：`agents/skills/commands/mcp_servers/hooks`、`counts` 与 `diagnostics`，条目包含来源、相对路径、`when_to_use`、`allowed_tools`、命令的 `argument_hint`，以及 MCP 的 `transport/status/tool_count/error/updated_at`。聊天界面不要求用户选择或提交组件 ID；服务端扫描时只读取 YAML frontmatter 和文件路径，用名称、描述等摘要进行初选；只在依赖解析或执行时读取已选组件的正文。服务端还会递归检查已选 Agent 和 Skill 的正文，解析其中显式或语义上引用的注册组件：嵌套 Skill 加载到主 Agent，嵌套 Agent 提供为可委派子 Agent（由主 Agent 决定是否委派）。`POST /agent/chat` 保留一次性响应接口；前端使用 `POST /agent/chat/stream` 接收分析状态、实际工具调用事件和最终回答。请求包含问题、会话 ID 和本次运行 ID；`POST /agent/chat/runs/{run_id}/cancel` 可请求停止任务，停止在当前模型或工具步骤结束后生效。回答中的 Markdown 网页链接会作为来源返回，但不会由服务端独立核验。客户端不接受或提交本地 Skill 路径、MCP 启动命令或组件 ID。MCP 的 `env` 配置支持 `${ENV_VAR}` 引用进程环境变量，避免把密钥写入配置文件。
+WebSocket 地址：
 
-Agent 无需额外 JSON 配置；Agent Markdown frontmatter 可通过 `skills` 和 `mcp_server_ids` 声明关联能力。普通问题的 Agent、Skill 和 MCP 选择由服务端根据当前问题完成，不使用默认 Agent。
+```text
+ws://127.0.0.1:8015/terminal/ws?session=<会话ID>&cols=<列数>&rows=<行数>
+```
 
-### 斜杠命令与技能调用
+客户端 → 服务端（JSON 文本帧）：
 
-输入框键入 `/` 会列出可用的命令和技能（`user-invocable: false` 或 `enabled: false` 的条目不参与）。发送后由服务端确定性解析，不再交给 LLM 路由：
+```json
+{ "type": "input", "data": "..." }
+{ "type": "resize", "cols": 120, "rows": 40 }
+```
 
-- `/命令名 参数`：读取 `.stock/commands/**/*.md`，按 frontmatter 选择 `agent` / `skills` / `mcp_server_ids`，正文替换 `$ARGUMENTS`、`$1`…`$9` 后作为本轮任务指令。
-- `/技能名 参数`：直接固定该技能并注入其 `SKILL.md`；参数作为本轮问题。
-- 未知命令返回 400，并在详情中列出可用命令与技能。
+服务端 → 客户端：会话缓冲区回放 + 原始 ANSI 终端输出。非 JSON 文本帧会按原始输入处理。
 
-命令 Markdown 示例：
+HTTP 接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/health` | 健康检查 |
+| GET | `/sessions` | 会话列表（按最后活动时间倒序） |
+| POST | `/sessions` | 新建会话并启动 CLI |
+| DELETE | `/sessions/{id}` | 删除会话并终止 CLI |
+| DELETE | `/sessions` | 删除全部会话 |
+| GET | `/sessions/{id}/output` | 导出该会话终端输出（纯文本） |
+| GET | `/sessions/export` | 导出全部会话（Markdown） |
+
+WebSocket 必须带 `session=<id>`；未知或已删除的会话会以关闭码 `4404` / `4001` 结束，缺少会话 ID 返回 `4400`。
+
+## 🧩 扩展（.stock）
+
+仅扫描 `stock-server/.stock`，不读取全局配置或仓库外的扩展目录。
+
+- `stock-server/.stock/agents/**/*.md`：Agent 定义；正文注入系统提示。
+- `stock-server/.stock/skills/**/SKILL.md`：技能定义；技能清单写入系统提示，模型按需用 `Read` 打开对应 `SKILL.md`。
+- `stock-server/.stock/commands/**/*.md`：斜杠命令定义；命令清单写入系统提示。
+- `stock-server/.stock/mcp-configs/mcp-servers.json`：MCP server 注册；通过 `--strict-mcp-config` 注入。
+- `stock-server/.stock/hooks/hooks.json`：Hook 定义；通过 `--settings` 注入。
+
+技能与命令文件使用 YAML frontmatter：
 
 ```markdown
 ---
@@ -65,130 +94,119 @@ enabled: true
 针对 $ARGUMENTS 生成结构化研究简报。
 ```
 
-`when_to_use` 与 Skill 的 `metadata.trigger` 会显示在能力面板中，并进入 LLM 路由的精简候选描述。命令正文只在本轮执行时读取，历史中保存用户输入的 `/命令 参数` 原文。
+扩展在**每次新建终端连接时**重新扫描；修改文件后，刷新页面或点“重连”即可生效。
 
-Agent 和 Skill Markdown 是指令，不是 Claude Code 或 Cursor 运行时本身：Agent 委派映射为 DeepAgents `task` 子 Agent，Skill 通过技能目录加载。定义中提及的工具只有在本平台实际配置后才能使用；Claude Code 原生 `settings.json` hooks、Cursor 配置、memory 和权限配置不会导入。只读取仓库内上述扩展目录中的项目文件。
-
-Hook 从扩展目录下的 `hooks/hooks.json` 加载，使用原生事件名、matcher 和 command 定义。例如：
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "tool == \"Bash\"",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python stock-server/.stock/hooks/scripts/audit_tool.py"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-`PreToolUse` 和 `PostToolUse` 会在工具调用前后执行；其他事件会被读取，但当前尚未连接到运行时触发点。命令在后端工作目录中以 shell 运行并继承后端环境变量，JSON 事件上下文通过 stdin 传递。`PreToolUse` 非零退出会阻止工具运行；命令非零退出或超时会使请求失败。Hook 以服务端身份执行，只应配置可信命令；`stock-server/.stock/settings.json` 不会被导入或执行。
-
-Agent frontmatter 中的模型选择目前不映射到其他模型；运行模型由 `stock-server/.env` 中的 `CHAT_MODEL` 决定。修改扩展文件后需重启后端以重新扫描。
-
-若希望右侧“执行过程”显示可折叠的“思考”行，需要选择会输出 `<think>…</think>` 的模型（如 MiniMax-M2.5 / M2.7 / M3；MiniMax-M3.1-Flash 不输出思考内容）。后端会自动从模型内容中提取思考块，并按时间顺序与工具步骤交错展示。
-
-MCP server 在扩展目录下的 `mcp-configs/mcp-servers.json` 中登记，配置使用 `mcpServers` 对象。例如：
-
-```json
-{
-  "mcpServers": {
-    "local-weather": {
-      "command": "node",
-      "args": ["mcp/weather-server.js"],
-      "cwd": ".",
-      "env": {
-        "WEATHER_API_KEY": "${WEATHER_API_KEY}"
-      }
-    }
-  }
-}
-```
-
-也支持通过 `type: "http"` 和 `url` 配置 HTTP MCP server。普通问题由服务端根据问题从已注册 server 中选择；命令或技能也可以通过 `mcp_server_ids` 显式指定。MCP 配置可启动服务端进程或发起网络连接，只应注册经过审查的 server。
-
-MCP 加载按 server 隔离：单个 server 失败不会中断整轮分析，其余 server 的工具继续可用。能力面板显示最近一次 Agent 构建的结果（`已连接` / `加载失败` / `尚未加载`）、工具数与错误摘要；状态只在构建 Agent 时更新，失败后需重启服务或调整配置后重新触发构建。
-
-修改 JSON 扩展配置后重启后端。Agent 会话检查点保存在进程内存中，后端重启会清空；前端历史仅保存在当前浏览器，不会同步到其他设备。
-
----
+> 注意：终端模式下，`/` 开头的内容由 CLI 自己的命令系统处理；`.stock/commands` 不会自动注册成 CLI 的斜杠命令。需要这些命令时，直接在对话中描述任务，模型会按系统提示读取对应技能/命令说明。
 
 ## 🚀 快速启动
 
 ### 前置条件
-- Python 3.12+
-- Node.js (LTS) & npm
-- Ollama (若使用本地模型)
+
+- **Bun 1.4+**（后端运行时）：<https://bun.sh>
+- **Node.js LTS + npm**（前端构建）
+- **Python 3.12+**（可选：行情抓取与文档处理技能脚本）
+- 首次安装依赖：
+
+  ```bash
+  cd stock-server && bun install
+  cd ../stock-ui && npm install
+  ```
 
 ### 一键启动前后端
-在项目根目录执行脚本，脚本会先启动后端并等待其就绪，再启动前端：
+
+Windows：
 
 ```powershell
 .\start_all.ps1
 ```
 
-Linux / macOS:
+Linux / macOS：
 
 ```bash
 bash ./start_all.sh
 ```
 
-前端访问 `http://localhost:4200`，后端 API 文档访问 `http://127.0.0.1:8015/docs`。前端运行期间按 `Ctrl+C` 可同时停止前后端。
+脚本先启动后端并等待 `127.0.0.1:8015` 就绪，再启动前端。
 
-首次运行时，脚本会按需安装前端依赖；后端依赖需已安装在项目虚拟环境中。
+- 前端：`http://localhost:4200`（默认进入终端页）
+- 终端页：`http://localhost:4200/terminal`
+- 后端健康检查：`http://127.0.0.1:8015/health`
+
+首次进入终端时，CLI 会显示主题选择和安全提示；按提示操作即可。
 
 ### 分别启动（可选）
-需要单独调试服务时，可分别启动：
 
-#### 启动后端
+后端：
+
 ```powershell
 cd stock-server
-# 激活虚拟环境 (如果尚未激活)
-# & "..\.venv\Scripts\Activate.ps1"
-
-# 启动后端
 .\start_server.ps1
+# Linux / macOS: ./start_server.sh
 ```
-后端服务将运行在: `http://127.0.0.1:8015`
 
-#### 启动前端
+前端：
+
 ```powershell
 cd stock-ui
-# 安装依赖 (仅首次运行)
-npm install
-
-# 启动开发服务器
 .\start_ui.ps1
+# Linux / macOS: ./start_ui.sh
 ```
-前端界面访问: `http://localhost:4200`
 
----
+不经过浏览器、直接使用 CLI：
+
+```bash
+cd stock-server
+bun run start
+```
 
 ## ⚙️ 配置说明
 
-首次配置时，将模板复制为 `stock-server/.env`，再按需修改：
+首次配置时，将模板复制为 `stock-server/.env`：
 
 ```powershell
-Copy-Item stock-server\.env.template stock-server\.env
+Copy-Item stock-server\.env.example stock-server\.env
 ```
 
-`.env` 不纳入 Git；提交时只提交 `.env.template`。配置项如下：
-- `OPENAI_API_KEY`: 你的 API Key（使用 Ollama 时可填任意字符）。
-- `OPENAI_API_BASE`: API 基础路径（如 `http://localhost:11434/v1`）。
-- `CHAT_MODEL`: 默认使用的模型名称（如 `gpt-oss:120b-cloud` 或 `qwen3:4b`）。
+`.env` 不纳入 Git，只提交 `.env.example`。主要配置项：
 
----
+| 变量 | 说明 |
+| --- | --- |
+| `INVEST_ANTHROPIC_BASE_URL` | Anthropic Messages API 兼容端点 |
+| `INVEST_ANTHROPIC_AUTH_TOKEN` / `INVEST_ANTHROPIC_API_KEY` | 访问凭据 |
+| `INVEST_ANTHROPIC_MODEL` | 默认模型 |
+| `INVEST_ANTHROPIC_DEFAULT_SONNET_MODEL` 等 | 模型映射 |
+| `INVEST_STOCK_PROVIDER_MANAGED_BY_HOST=1` | 忽略全局 CLI 的模型路由配置 |
+| `INVEST_TERMINAL_HOST` / `INVEST_TERMINAL_PORT` | 终端服务监听地址与端口（默认 `127.0.0.1:8015`） |
+
+技能脚本的 Python 依赖：
+
+```bash
+.venv/Scripts/python -m pip install -r stock-server/requirements-skills.txt   # Windows
+.venv/bin/python     -m pip install -r stock-server/requirements-skills.txt   # Linux / macOS
+```
 
 ## 📁 目录结构
-- `stock-server/`: 后端核心代码
-  - `src/`: 源代码 (api, agent, brain, services)
-  - `.stock/`: Agent、Skill、Command、Hook 和 MCP 扩展定义
-- `stock-ui/`: 前端界面代码
-- `.venv/`: Python 虚拟环境
+
+- `stock-server/`
+  - `terminal/`：PTY + WebSocket 服务与 CLI 参数注入
+  - `lib/`：`.stock` 扩展扫描（catalog / frontmatter）
+  - `src/`：StockAssistant CLI 与分析引擎
+  - `compat/`：运行时兼容层（环境变量映射、构建宏、原生包 stub）
+  - `.stock/`：Agent、Skill、Command、Hook、MCP 扩展定义
+  - `.env` / `.env.example`：模型配置
+  - `start_server.*`：后端启动脚本
+- `stock-ui/`
+  - `src/app/terminal/`：xterm.js 终端页
+  - `src/app/stock-chat/`：旧聊天页（后端已移除，仅作参考）
+- `start_all.*`：一键启动前后端
+- `.tmp/`：本地临时文件（已忽略）
+
+## 📝 说明与限制
+
+- **终端等于命令执行权限**：服务只监听 `127.0.0.1`，不要暴露到公网；`--dangerously-skip-permissions` 会跳过权限确认。
+- 一个服务端会话对应一个 CLI 进程；关闭页面只断开连接，会话保留，可从左侧栏重新进入。
+- 会话保存在后端内存中；重启后端会丢失所有会话（CLI 进程也会结束）。
+- `.stock` 的斜杠命令不会注册为 CLI 原生命令；技能通过系统提示 + 按需读取 `SKILL.md` 生效。
+- `.stock` 中的技能脚本依赖仓库根目录的 `.venv`；MCP server（`quant_tools_server.py`）为纯标准库实现。
+- 分析引擎需要一个兼容 Anthropic Messages API 的端点；模型是否输出 `thinking` 取决于模型本身。
+- 原聊天页 `/chat` 的 `/agent/*` 接口已随 `server/` 删除，页面仅作历史参考。

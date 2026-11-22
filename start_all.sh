@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# StockAssistant 一键启动：后端 + 前端（Linux / macOS）
+# StockAssistant 一键启动：Bun 后端 + Angular 前端（Linux / macOS）
 # 后端在后台运行，前端占用当前终端；Ctrl+C 会同时停止两者。
 set -euo pipefail
 

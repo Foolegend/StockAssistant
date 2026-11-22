@@ -1,0 +1,37 @@
+# StockAssistant 技能脚本 Python 依赖
+#
+# 注意：Bun 后端本身不依赖 Python。这个文件只用于 `.stock` 中的技能脚本
+# （行情抓取、财报解析、文档处理等）以及 mcp-builder 示例。
+#
+# 安装（复用仓库根目录的 .venv）：
+#   .venv/Scripts/python -m pip install -r stock-server/requirements-skills.txt
+#   # Linux / macOS
+#   .venv/bin/python -m pip install -r stock-server/requirements-skills.txt
+
+# 行情数据源（stock-analysis / market-cycle-assessment / enterprise-statement-analysis）
+akshare==1.18.64
+efinance==0.5.8
+yfinance==1.4.1
+tushare==1.4.29
+pandas==3.0.2
+requests==2.33.1
+
+# 文档处理技能（pdf / docx / docx-cn / pptx / xlsx / doc-handler）
+beautifulsoup4==4.14.3
+lxml==6.1.0
+openpyxl==3.1.5
+pypdf==7.1.0
+pdfplumber==0.11.9
+python-docx==1.2.0
+python-pptx
+defusedxml==0.7.1
+pillow==13.0.0
+pdf2image
+validators
+
+# mcp-builder 技能中的示例脚本
+mcp==1.30.0
+anthropic==0.124.0
+
+# webapp-testing 技能中的示例脚本（可选）
+# playwright
