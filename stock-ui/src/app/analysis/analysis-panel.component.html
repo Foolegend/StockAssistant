@@ -31,57 +31,6 @@
         <p class="analysis-running">分析进行中，过程会实时更新…</p>
       }
 
-      @if (steps.length) {
-        <section class="analysis-process">
-          <div class="analysis-process-title">分析过程</div>
-          <ol class="analysis-steps">
-            @for (step of steps; track $index) {
-              @switch (step.kind) {
-                @case ('user') {
-                  <li class="step user">
-                    <span class="step-label">你的问题</span>
-                    <p class="step-text">{{ step.text }}</p>
-                  </li>
-                }
-                @case ('thought') {
-                  <li class="step thought">
-                    <span class="step-label">思考</span>
-                    <p class="step-text">{{ step.text }}</p>
-                  </li>
-                }
-                @case ('tool_start') {
-                  <li class="step tool">
-                    <span class="step-label">调用工具 · {{ step.tool }}</span>
-                    @if (step.args) {
-                      <pre>{{ step.args }}</pre>
-                    }
-                  </li>
-                }
-                @case ('tool_end') {
-                  <li class="step tool" [class.failed]="step.error">
-                    <span class="step-label">
-                      工具结果{{ step.error ? '（失败）' : '' }}
-                    </span>
-                    @if (step.output) {
-                      <pre>{{ step.output }}</pre>
-                    }
-                  </li>
-                }
-                @case ('text') {
-                  <li class="step text">
-                    <span class="step-label">阶段输出</span>
-                    <article
-                      class="analysis-content"
-                      [innerHTML]="step.text | markdown"
-                    ></article>
-                  </li>
-                }
-              }
-            }
-          </ol>
-        </section>
-      }
-
       @if (answer) {
         <section class="analysis-answer">
           <div class="analysis-answer-title">最终结论</div>
@@ -90,6 +39,84 @@
             [innerHTML]="answer | markdown"
           ></article>
         </section>
+      }
+
+      @if (steps.length) {
+        <details class="analysis-process">
+          <summary class="analysis-process-title">
+            <span>分析过程</span>
+            <span class="analysis-process-count">
+              {{ steps.length }} 步 · 点击展开
+            </span>
+          </summary>
+          <ol class="analysis-steps">
+            @for (step of steps; track $index) {
+              @switch (step.kind) {
+                @case ('user') {
+                  <li>
+                    <details class="step user">
+                      <summary class="step-label">你的问题</summary>
+                      <div class="step-body">
+                        <p class="step-text">{{ step.text }}</p>
+                      </div>
+                    </details>
+                  </li>
+                }
+                @case ('thought') {
+                  <li>
+                    <details class="step thought">
+                      <summary class="step-label">思考</summary>
+                      <div class="step-body">
+                        <p class="step-text">{{ step.text }}</p>
+                      </div>
+                    </details>
+                  </li>
+                }
+                @case ('tool_start') {
+                  <li>
+                    <details class="step tool">
+                      <summary class="step-label">
+                        调用工具 · {{ step.tool }}
+                      </summary>
+                      @if (step.args) {
+                        <div class="step-body">
+                          <pre>{{ step.args }}</pre>
+                        </div>
+                      }
+                    </details>
+                  </li>
+                }
+                @case ('tool_end') {
+                  <li>
+                    <details class="step tool" [class.failed]="step.error">
+                      <summary class="step-label">
+                        工具结果{{ step.error ? '（失败）' : '' }}
+                      </summary>
+                      @if (step.output) {
+                        <div class="step-body">
+                          <pre>{{ step.output }}</pre>
+                        </div>
+                      }
+                    </details>
+                  </li>
+                }
+                @case ('text') {
+                  <li>
+                    <details class="step text">
+                      <summary class="step-label">阶段输出</summary>
+                      <div class="step-body">
+                        <article
+                          class="analysis-content"
+                          [innerHTML]="step.text | markdown"
+                        ></article>
+                      </div>
+                    </details>
+                  </li>
+                }
+              }
+            }
+          </ol>
+        </details>
       }
 
       @if (!steps.length && !answer && !running) {

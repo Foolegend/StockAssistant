@@ -119,10 +119,15 @@
 }
 
 .analysis-process {
-  margin-bottom: 22px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid #1f2937;
 }
 
-.analysis-process-title,
+.analysis-answer {
+  margin: 0 0 18px;
+}
+
 .analysis-answer-title {
   font-size: 11px;
   font-weight: 600;
@@ -132,9 +137,48 @@
   margin: 0 0 8px;
 }
 
+.analysis-process > summary.analysis-process-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.analysis-process > summary.analysis-process-title::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-process > summary.analysis-process-title::before {
+  content: '▸';
+  color: #64748b;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.analysis-process[open] > summary.analysis-process-title::before {
+  transform: rotate(90deg);
+}
+
+.analysis-process-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: #475569;
+}
+
 .analysis-steps {
   list-style: none;
-  margin: 0;
+  margin: 10px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -161,11 +205,37 @@
   border-color: #7f1d1d;
 }
 
-.step-label {
-  display: block;
+.step > summary.step-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
   font-size: 11px;
   color: #94a3b8;
-  margin-bottom: 4px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.step > summary.step-label::-webkit-details-marker {
+  display: none;
+}
+
+.step > summary.step-label::before {
+  content: '▸';
+  color: #64748b;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.step[open] > summary.step-label::before {
+  transform: rotate(90deg);
+}
+
+.step-body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #1e293b;
 }
 
 .step-text {
@@ -190,12 +260,6 @@
 
 .step .analysis-content {
   font-size: 12px;
-}
-
-.analysis-answer {
-  margin-top: 4px;
-  padding-top: 14px;
-  border-top: 1px solid #1f2937;
 }
 
 .analysis-error {
