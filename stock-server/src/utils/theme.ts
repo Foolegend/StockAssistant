@@ -52,6 +52,8 @@ export type Theme = {
   // TUI V2 colors
   clawd_body: string
   clawd_background: string
+  clawd_bullish: string
+  clawd_bearish: string
   userMessageBackground: string
   userMessageBackgroundHover: string
   /** Message-actions selection. Cool shift toward `suggestion` blue; distinct from default AND userMessageBackground. */
@@ -160,6 +162,8 @@ const lightTheme: Theme = {
   // TUI V2 colors
   clawd_body: 'rgb(74,222,128)',
   clawd_background: 'rgb(0,0,0)',
+  clawd_bullish: 'rgb(34,197,94)',
+  clawd_bearish: 'rgb(239,68,68)',
   userMessageBackground: 'rgb(240, 240, 240)', // Slightly darker grey for optimal contrast
   userMessageBackgroundHover: 'rgb(252, 252, 252)', // ≥250 to quantize distinct from base at 256-color level
   messageActionsBackground: 'rgb(232, 236, 244)', // cool gray — darker than userMsg 240 (visible on white), slight blue toward `suggestion`
@@ -242,6 +246,8 @@ const lightAnsiTheme: Theme = {
   // TUI V2 colors
   clawd_body: 'ansi:greenBright',
   clawd_background: 'ansi:black',
+  clawd_bullish: 'ansi:greenBright',
+  clawd_bearish: 'ansi:redBright',
   userMessageBackground: 'ansi:white',
   userMessageBackgroundHover: 'ansi:whiteBright',
   messageActionsBackground: 'ansi:white',
@@ -323,6 +329,8 @@ const darkAnsiTheme: Theme = {
   // TUI V2 colors
   clawd_body: 'ansi:greenBright',
   clawd_background: 'ansi:black',
+  clawd_bullish: 'ansi:greenBright',
+  clawd_bearish: 'ansi:redBright',
   userMessageBackground: 'ansi:blackBright',
   userMessageBackgroundHover: 'ansi:white',
   messageActionsBackground: 'ansi:blackBright',
@@ -404,6 +412,8 @@ const lightDaltonizedTheme: Theme = {
   // TUI V2 colors
   clawd_body: 'rgb(74,222,128)',
   clawd_background: 'rgb(0,0,0)',
+  clawd_bullish: 'rgb(34,197,94)',
+  clawd_bearish: 'rgb(239,68,68)',
   userMessageBackground: 'rgb(220, 220, 220)', // Slightly darker grey for optimal contrast
   userMessageBackgroundHover: 'rgb(232, 232, 232)', // ≥230 to quantize distinct from base at 256-color level
   messageActionsBackground: 'rgb(210, 216, 226)', // cool gray — darker than userMsg 220, slight blue
@@ -485,6 +495,8 @@ const darkTheme: Theme = {
   // TUI V2 colors
   clawd_body: 'rgb(74,222,128)',
   clawd_background: 'rgb(0,0,0)',
+  clawd_bullish: 'rgb(34,197,94)',
+  clawd_bearish: 'rgb(239,68,68)',
   userMessageBackground: 'rgb(55, 55, 55)', // Lighter grey for better visual contrast
   userMessageBackgroundHover: 'rgb(70, 70, 70)',
   messageActionsBackground: 'rgb(44, 50, 62)', // cool gray, slight blue
@@ -566,6 +578,8 @@ const darkDaltonizedTheme: Theme = {
   // TUI V2 colors
   clawd_body: 'rgb(74,222,128)',
   clawd_background: 'rgb(0,0,0)',
+  clawd_bullish: 'rgb(34,197,94)',
+  clawd_bearish: 'rgb(239,68,68)',
   userMessageBackground: 'rgb(55, 55, 55)', // Lighter grey for better visual contrast
   userMessageBackgroundHover: 'rgb(70, 70, 70)',
   messageActionsBackground: 'rgb(44, 50, 62)', // cool gray, slight blue

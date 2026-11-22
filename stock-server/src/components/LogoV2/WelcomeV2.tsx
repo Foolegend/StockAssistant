@@ -2,6 +2,24 @@ import { c as _c } from "react/compiler-runtime";
 import React from 'react';
 import { Box, Text, useTheme } from 'src/ink.js';
 import { env } from '../../utils/env.js';
+const CANDLE_ROWS = [' ▁▃▅▇█▅▃ ', ' █▓█▓█▓█ ', ' ▔▔▔▔▔▔▔ '];
+
+function CandleArt({ row, background = false }: { row: number; background?: boolean }) {
+  const chars = CANDLE_ROWS[row] ?? '';
+  return (
+    <Text backgroundColor={background ? 'clawd_background' : undefined}>
+      {[...chars].map((char, index) => (
+        <Text
+          key={index}
+          color={index % 2 === 1 ? 'clawd_bullish' : 'clawd_bearish'}
+        >
+          {char}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
 const WELCOME_V2_WIDTH = 58;
 export function WelcomeV2() {
   const $ = _c(35);
@@ -77,21 +95,21 @@ export function WelcomeV2() {
     }
     let t12;
     if ($[14] === Symbol.for("react.memo_cache_sentinel")) {
-      t12 = <Text>{"      "}<Text color="clawd_body"> ▁▃▅▇█▅▃ </Text>{"                         \u2592\u2592\u2591\u2591\u2592\u2592      \u2592 \u2592\u2592"}</Text>;
+      t12 = <Text>{"      "}<CandleArt row={0} />{"                         \u2592\u2592\u2591\u2591\u2592\u2592      \u2592 \u2592\u2592"}</Text>;
       $[14] = t12;
     } else {
       t12 = $[14];
     }
     let t13;
     if ($[15] === Symbol.for("react.memo_cache_sentinel")) {
-      t13 = <Text>{"      "}<Text color="clawd_body" backgroundColor="clawd_background"> █▓█▓█▓█ </Text>{"                           \u2592\u2592         \u2592\u2592 "}</Text>;
+      t13 = <Text>{"      "}<CandleArt row={1} background />{"                           \u2592\u2592         \u2592\u2592 "}</Text>;
       $[15] = t13;
     } else {
       t13 = $[15];
     }
     let t14;
     if ($[16] === Symbol.for("react.memo_cache_sentinel")) {
-      t14 = <Text>{"      "}<Text color="clawd_body"> ▁▃▅▇█▅▃ </Text>{"                          \u2591          \u2592   "}</Text>;
+      t14 = <Text>{"      "}<CandleArt row={0} />{"                          \u2591          \u2592   "}</Text>;
       $[16] = t14;
     } else {
       t14 = $[16];
@@ -161,7 +179,7 @@ export function WelcomeV2() {
   }
   let t12;
   if ($[30] === Symbol.for("react.memo_cache_sentinel")) {
-    t12 = <Text color="clawd_body"> ▁▃▅▇█▅▃ </Text>;
+    t12 = <CandleArt row={0} />;
     $[30] = t12;
   } else {
     t12 = $[30];
@@ -175,14 +193,14 @@ export function WelcomeV2() {
   }
   let t14;
   if ($[32] === Symbol.for("react.memo_cache_sentinel")) {
-    t14 = <Text>{"      "}<Text color="clawd_body"> █▓█▓█▓█ </Text><Text>{"                        "}</Text><Text bold={true}>*</Text><Text>{"                "}</Text></Text>;
+    t14 = <Text>{"      "}<CandleArt row={1} /><Text>{"                        "}</Text><Text bold={true}>*</Text><Text>{"                "}</Text></Text>;
     $[32] = t14;
   } else {
     t14 = $[32];
   }
   let t15;
   if ($[33] === Symbol.for("react.memo_cache_sentinel")) {
-    t15 = <Text>{"      "}<Text color="clawd_body"> ▁▃▅▇█▅▃ </Text>{"     *                                   "}</Text>;
+    t15 = <Text>{"      "}<CandleArt row={0} />{"     *                                   "}</Text>;
     $[33] = t15;
   } else {
     t15 = $[33];
