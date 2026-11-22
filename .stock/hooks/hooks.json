@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "tool == \"Bash\" && tool_input.command matches \"stock_data_fetcher[.]py.*--stocks\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${STOCK_PLUGIN_ROOT}/stock-server/.stock/hooks/scripts/validate-stock-data.js\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Block stock analysis data with missing or stale bar dates"
+      }
+    ]
+  }
+}

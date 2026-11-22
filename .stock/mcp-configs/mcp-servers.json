@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "quant-tools": {
+      "command": "python",
+      "args": [".stock/mcp-servers/quant_tools_server.py"],
+      "cwd": ".",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "description": "本地量化计算：股票代码标准化、技术指标（MA/MACD/RSI/BOLL/ATR）、仓位与止损测算、估值比率（PE/PB/PEG）。纯本地计算，不联网、不获取行情。"
+    }
+  }
+}
