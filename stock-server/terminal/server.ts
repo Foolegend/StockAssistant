@@ -22,7 +22,7 @@
  *   server -> client: session buffer replay + raw ANSI output
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
@@ -131,19 +131,93 @@ function stripAnsi(text: string): string {
     .replace(/\x1b[@-Z\\-_]/g, '');
 }
 
-/** Looks for the CLI's own saved session file (~/.stock/projects/<dir>/<id>.jsonl). */
-function hasCliSession(id: string): boolean {
+/** Finds the CLI's own saved session file (~/.stock/projects/<dir>/<id>.jsonl). */
+function findCliSessionPath(id: string): string | null {
   const root = join(homedir(), '.stock', 'projects');
-  if (!existsSync(root)) return false;
+  if (!existsSync(root)) return null;
   try {
     for (const entry of readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      if (existsSync(join(root, entry.name, `${id}.jsonl`))) return true;
+      const file = join(root, entry.name, `${id}.jsonl`);
+      if (existsSync(file)) return file;
     }
   } catch {
     // Ignore unreadable project dirs.
   }
-  return false;
+  return null;
+}
+
+function hasCliSession(id: string): boolean {
+  return findCliSessionPath(id) !== null;
+}
+
+interface AnalysisMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string | null;
+}
+
+function contentToText(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (!block || typeof block !== 'object') return '';
+        const item = block as { type?: unknown; text?: unknown };
+        return item.type === 'text' ? String(item.text ?? '') : '';
+      })
+      .join('\n')
+      .trim();
+  }
+  return '';
+}
+
+/**
+ * Extracts the user/assistant text from the CLI's session transcript. Tool
+ * results, thinking blocks and sidechain messages are ignored; the last
+ * assistant text is the final analysis answer.
+ */
+function readAnalysis(id: string): {
+  answer: string | null;
+  updated_at: string | null;
+  messages: AnalysisMessage[];
+} {
+  const file = findCliSessionPath(id);
+  if (!file) return { answer: null, updated_at: null, messages: [] };
+
+  const messages: AnalysisMessage[] = [];
+  let lastTimestamp: string | null = null;
+  try {
+    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      let record: Record<string, unknown>;
+      try {
+        record = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (record.type !== 'user' && record.type !== 'assistant') continue;
+      if (record.isSidechain === true) continue;
+      const inner = record.message as { content?: unknown } | undefined;
+      const content = contentToText(inner?.content);
+      if (!content) continue;
+      const timestamp =
+        typeof record.timestamp === 'string' ? record.timestamp : null;
+      messages.push({ role: record.type, content, timestamp });
+      if (timestamp) lastTimestamp = timestamp;
+    }
+  } catch {
+    return { answer: null, updated_at: null, messages: [] };
+  }
+
+  const assistant = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant');
+  return {
+    answer: assistant?.content ?? null,
+    updated_at: assistant?.timestamp ?? lastTimestamp,
+    messages,
+  };
 }
 
 function summary(session: Session) {
@@ -413,6 +487,12 @@ const server = Bun.serve<SocketData>({
           'Content-Disposition': 'attachment; filename="terminal-sessions.md"',
         }),
       });
+    }
+
+    const analysisMatch = /^\/sessions\/([^/]+)\/analysis$/.exec(url.pathname);
+    if (method === 'GET' && analysisMatch) {
+      const id = decodeURIComponent(analysisMatch[1]);
+      return json(readAnalysis(id));
     }
 
     const outputMatch = /^\/sessions\/([^/]+)\/output$/.exec(url.pathname);

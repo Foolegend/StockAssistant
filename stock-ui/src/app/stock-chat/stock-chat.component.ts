@@ -15,6 +15,7 @@ import {
   SlashSuggestion,
   UsageInfo,
 } from '../extensions/capabilities.types';
+import { AnalysisPanelComponent } from '../analysis/analysis-panel.component';
 import { CapabilitiesDialogComponent } from '../extensions/capabilities-dialog.component';
 import { TerminalComponent } from '../terminal/terminal.component';
 
@@ -163,6 +164,7 @@ const TOOL_TARGET_KEYS = [
     FormsModule,
     CapabilitiesDialogComponent,
     TerminalComponent,
+    AnalysisPanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './stock-chat.component.html',
@@ -186,6 +188,7 @@ export class StockChatComponent implements OnDestroy {
   conversations: ChatConversation[] = [];
   currentConversation: ChatConversation;
   activeSessionId: string | null = null;
+  terminalCollapsed = false;
   userQuestion = '';
   isLoading = false;
   conversationLoading = false;
@@ -244,6 +247,11 @@ export class StockChatComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     if (this.sessionPoll) clearInterval(this.sessionPoll);
+  }
+
+  toggleTerminal(): void {
+    this.terminalCollapsed = !this.terminalCollapsed;
+    this.cdr.markForCheck();
   }
 
   get currentSources(): SourceLink[] {

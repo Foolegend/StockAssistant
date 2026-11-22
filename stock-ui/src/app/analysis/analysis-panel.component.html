@@ -1,0 +1,33 @@
+<section class="analysis-panel">
+  <header class="analysis-header">
+    <div class="analysis-title">
+      <span class="analysis-dot" [class.ready]="!!answer"></span>
+      <div class="analysis-heading">
+        <strong>分析结果</strong>
+        <span class="analysis-meta">{{ metaText }}</span>
+      </div>
+    </div>
+    <button
+      class="analysis-refresh"
+      type="button"
+      (click)="refresh()"
+      [disabled]="loading || !sessionId"
+    >
+      刷新
+    </button>
+  </header>
+
+  <div class="analysis-body">
+    @if (!sessionId) {
+      <p class="analysis-empty">选择或新建一个会话后，分析结果会显示在这里。</p>
+    } @else if (error) {
+      <p class="analysis-error">{{ error }}</p>
+    } @else if (answer) {
+      <article class="analysis-content" [innerHTML]="answer | markdown"></article>
+    } @else {
+      <p class="analysis-empty">
+        在终端中提问后，最终分析结果会以网页形式显示在这里。
+      </p>
+    }
+  </div>
+</section>

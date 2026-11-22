@@ -125,12 +125,21 @@
         </div>
       </div>
       <div class="topbar-actions">
+        <button class="analysis-toggle" type="button" (click)="toggleTerminal()">
+          {{ terminalCollapsed ? '恢复终端' : '聚焦分析' }}
+        </button>
         <span class="topbar-mode">终端模式</span>
       </div>
     </header>
 
-    <div class="content-layout terminal-layout">
-      <app-terminal class="embedded-terminal" [sessionId]="activeSessionId" />
+    <div
+      class="content-layout terminal-layout"
+      [class.terminal-collapsed]="terminalCollapsed"
+    >
+      <div class="terminal-column">
+        <app-terminal class="embedded-terminal" [sessionId]="activeSessionId" />
+      </div>
+      <app-analysis-panel [sessionId]="activeSessionId" />
     </div>
   </main>
 
