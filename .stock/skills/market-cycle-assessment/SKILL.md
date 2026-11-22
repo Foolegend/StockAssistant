@@ -16,13 +16,13 @@ user-invocable: true
 Windows (cmd)：
 
 ```bash
-"%PYTHON_EXEC%" stock-server/.stock/skills/market-cycle-assessment/references/market_brief.py
+"%PYTHON_EXEC%" .stock/skills/market-cycle-assessment/references/market_brief.py
 ```
 
 Linux / macOS：
 
 ```bash
-"$PYTHON_EXEC" stock-server/.stock/skills/market-cycle-assessment/references/market_brief.py
+"$PYTHON_EXEC" .stock/skills/market-cycle-assessment/references/market_brief.py
 ```
 
 可选参数：`--pretty`（缩进输出）、`--no-news`（跳过快讯）、`--news-limit 60`（增加快讯条数）。

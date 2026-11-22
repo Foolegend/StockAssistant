@@ -6,8 +6,11 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import type { CapabilityCatalog } from '../lib/catalog';
+import { delimiter, dirname, join, relative } from 'node:path';
+import {
+  resolveExtensionRoot,
+  type CapabilityCatalog,
+} from '../lib/catalog';
 
 export interface TerminalLaunch {
   args: string[];
@@ -59,6 +62,16 @@ export function buildTerminalLaunch(
     COLORTERM: process.env.COLORTERM ?? 'truecolor',
   };
 
+  // Put the repo venv first so skill scripts run with the Python environment
+  // that has the data/document dependencies installed.
+  const venvDir =
+    process.platform === 'win32'
+      ? join(repoRoot, '.venv', 'Scripts')
+      : join(repoRoot, '.venv', 'bin');
+  if (existsSync(venvDir)) {
+    env.PATH = `${venvDir}${delimiter}${env.PATH ?? ''}`;
+  }
+
   const args = [
     'run',
     '--preload',
@@ -67,14 +80,14 @@ export function buildTerminalLaunch(
     '--dangerously-skip-permissions',
     '--strict-mcp-config',
     '--mcp-config',
-    buildMcpConfig(repoRoot, stockRoot),
+    buildMcpConfig(repoRoot),
     '--append-system-prompt',
     buildSystemAppend(catalog, agentBodies, repoRoot),
     '--add-dir',
     repoRoot,
   ];
 
-  const settings = buildSettings(repoRoot, stockRoot);
+  const settings = buildSettings(repoRoot);
   if (settings) args.push('--settings', settings);
 
   if (options.sessionId) {
@@ -133,10 +146,13 @@ function buildSystemAppend(
     );
   }
 
+  const extensionRoot = resolveExtensionRoot(repoRoot);
+  const extensionLabel = relative(repoRoot, extensionRoot).replace(/\\/g, '/');
+
   lines.push(
     '## 运行环境',
     `- 仓库根目录：${repoRoot}`,
-    '- 扩展目录：stock-server/.stock（skills / commands / agents / mcp-configs）',
+    `- 扩展目录：${extensionLabel}（skills / commands / agents / mcp-configs）`,
     '- 文件与 shell 路径均相对于仓库根目录；临时文件只写入 .tmp/。',
     '- 回答投资问题时给出结论、依据与风险；缺少标的或周期时先询问。',
   );
@@ -144,8 +160,9 @@ function buildSystemAppend(
   return lines.join('\n');
 }
 
-export function buildMcpConfig(repoRoot: string, stockRoot: string): string {
-  const file = join(stockRoot, '.stock', 'mcp-configs', 'mcp-servers.json');
+export function buildMcpConfig(repoRoot: string): string {
+  const extensionRoot = resolveExtensionRoot(repoRoot);
+  const file = join(extensionRoot, 'mcp-configs', 'mcp-servers.json');
   const fallback = '{"mcpServers":{}}';
   if (!existsSync(file)) return fallback;
   try {
@@ -154,6 +171,10 @@ export function buildMcpConfig(repoRoot: string, stockRoot: string): string {
     };
     const servers = parsed.mcpServers ?? {};
     const python = resolvePython(repoRoot);
+    // Relative args are written against the directory that contains `.stock`
+    // (the repo root for the preferred layout, `stock-server/` for the legacy
+    // fallback). Resolve them to absolute paths for the MCP client.
+    const argsBase = dirname(extensionRoot);
     for (const server of Object.values(servers)) {
       if (server.command === 'python' || server.command === 'python3') {
         server.command = python;
@@ -161,7 +182,7 @@ export function buildMcpConfig(repoRoot: string, stockRoot: string): string {
       if (Array.isArray(server.args)) {
         server.args = server.args.map((arg) =>
           typeof arg === 'string' && arg.startsWith('.')
-            ? join(stockRoot, arg)
+            ? join(argsBase, arg)
             : arg,
         );
       }
@@ -173,11 +194,8 @@ export function buildMcpConfig(repoRoot: string, stockRoot: string): string {
   }
 }
 
-export function buildSettings(
-  repoRoot: string,
-  stockRoot: string,
-): string | null {
-  const file = join(stockRoot, '.stock', 'hooks', 'hooks.json');
+export function buildSettings(repoRoot: string): string | null {
+  const file = join(resolveExtensionRoot(repoRoot), 'hooks', 'hooks.json');
   if (!existsSync(file)) return null;
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<

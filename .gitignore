@@ -182,8 +182,6 @@ stock-server/data/
 !stock-server/lib/
 !stock-server/lib/**
 
-# CLI project-config copy at repo root (source of truth: stock-server/.stock)
-/.stock/
 
 # Source command directory named "env" (not a Python virtualenv)
 !stock-server/src/commands/env/

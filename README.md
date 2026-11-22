@@ -14,6 +14,8 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP（Mode
   - `Bun.serve` 监听 `127.0.0.1:8015`
   - 每个**会话**拥有一个 `Bun.Terminal`（PTY）和一个 CLI 进程；WebSocket 只是附着/分离，断开连接不会终止 CLI
   - 会话带输出缓冲区，重新附着时会先回放，再继续实时输出
+  - 会话元数据与输出持久化到 SQLite（默认 `stock-server/data/terminal-sessions.db`），重启后仍在侧栏
+  - 重新附着时优先用 CLI 的 `--resume` 恢复上下文；没有 CLI 会话文件时用同一 ID 新建
   - `GET /health` 返回 `{"ok":true}`
 - **CLI 引擎**：`src/entrypoints/cli.tsx`，以**交互模式**运行（不再使用 `-p` headless）
 - **启动参数注入**：[terminal/wiring.ts](stock-server/terminal/wiring.ts)
@@ -67,13 +69,13 @@ WebSocket 必须带 `session=<id>`；未知或已删除的会话会以关闭码 
 
 ## 🧩 扩展（.stock）
 
-仅扫描 `stock-server/.stock`，不读取全局配置或仓库外的扩展目录。
+仅扫描 `.stock`，不读取全局配置或仓库外的扩展目录。
 
-- `stock-server/.stock/agents/**/*.md`：Agent 定义；正文注入系统提示。
-- `stock-server/.stock/skills/**/SKILL.md`：技能定义；技能清单写入系统提示，模型按需用 `Read` 打开对应 `SKILL.md`。
-- `stock-server/.stock/commands/**/*.md`：斜杠命令定义；命令清单写入系统提示。
-- `stock-server/.stock/mcp-configs/mcp-servers.json`：MCP server 注册；通过 `--strict-mcp-config` 注入。
-- `stock-server/.stock/hooks/hooks.json`：Hook 定义；通过 `--settings` 注入。
+- `.stock/agents/**/*.md`：Agent 定义；正文注入系统提示。
+- `.stock/skills/**/SKILL.md`：技能定义；技能清单写入系统提示，模型按需用 `Read` 打开对应 `SKILL.md`。
+- `.stock/commands/**/*.md`：斜杠命令定义；命令清单写入系统提示。
+- `.stock/mcp-configs/mcp-servers.json`：MCP server 注册；通过 `--strict-mcp-config` 注入。
+- `.stock/hooks/hooks.json`：Hook 定义；通过 `--settings` 注入。
 
 技能与命令文件使用 YAML frontmatter：
 
@@ -177,13 +179,17 @@ Copy-Item stock-server\.env.example stock-server\.env
 | `INVEST_ANTHROPIC_DEFAULT_SONNET_MODEL` 等 | 模型映射 |
 | `INVEST_STOCK_PROVIDER_MANAGED_BY_HOST=1` | 忽略全局 CLI 的模型路由配置 |
 | `INVEST_TERMINAL_HOST` / `INVEST_TERMINAL_PORT` | 终端服务监听地址与端口（默认 `127.0.0.1:8015`） |
+| `INVEST_TERMINAL_DB` | 终端会话 SQLite 路径（默认 `stock-server/data/terminal-sessions.db`） |
 
 技能脚本的 Python 依赖：
 
 ```bash
+python -m venv .venv
 .venv/Scripts/python -m pip install -r stock-server/requirements-skills.txt   # Windows
 .venv/bin/python     -m pip install -r stock-server/requirements-skills.txt   # Linux / macOS
 ```
+
+终端启动 CLI 时会把 `.venv` 放在子进程 `PATH` 最前面，技能脚本里的 `python` 会使用它。
 
 ## 📁 目录结构
 
@@ -192,9 +198,9 @@ Copy-Item stock-server\.env.example stock-server\.env
   - `lib/`：`.stock` 扩展扫描（catalog / frontmatter）
   - `src/`：StockAssistant CLI 与分析引擎
   - `compat/`：运行时兼容层（环境变量映射、构建宏、原生包 stub）
-  - `.stock/`：Agent、Skill、Command、Hook、MCP 扩展定义
   - `.env` / `.env.example`：模型配置
   - `start_server.*`：后端启动脚本
+- `.stock/`：Agent、Skill、Command、Hook、MCP 扩展定义（仓库根目录，CLI 原生加载）
 - `stock-ui/`
   - `src/app/terminal/`：xterm.js 终端页
   - `src/app/stock-chat/`：旧聊天页（后端已移除，仅作参考）
@@ -205,8 +211,8 @@ Copy-Item stock-server\.env.example stock-server\.env
 
 - **终端等于命令执行权限**：服务只监听 `127.0.0.1`，不要暴露到公网；`--dangerously-skip-permissions` 会跳过权限确认。
 - 一个服务端会话对应一个 CLI 进程；关闭页面只断开连接，会话保留，可从左侧栏重新进入。
-- 会话保存在后端内存中；重启后端会丢失所有会话（CLI 进程也会结束）。
+- 会话元数据与终端输出持久化到 SQLite；重启后端后会话仍在侧栏。CLI 进程本身不会跨重启存活，重新进入时会重建进程，并在 CLI 会话文件存在时用 `--resume` 恢复上下文。
 - `.stock` 的斜杠命令不会注册为 CLI 原生命令；技能通过系统提示 + 按需读取 `SKILL.md` 生效。
-- `.stock` 中的技能脚本依赖仓库根目录的 `.venv`；MCP server（`quant_tools_server.py`）为纯标准库实现。
+- `.stock` 中的技能脚本使用仓库根目录的 `.venv`（终端会把 `.venv` 加入 CLI 子进程 `PATH`）；MCP server（`quant_tools_server.py`）为纯标准库实现。
 - 分析引擎需要一个兼容 Anthropic Messages API 的端点；模型是否输出 `thinking` 取决于模型本身。
 - 原聊天页 `/chat` 的 `/agent/*` 接口已随 `server/` 删除，页面仅作历史参考。

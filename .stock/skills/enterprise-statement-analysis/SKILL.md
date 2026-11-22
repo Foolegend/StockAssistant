@@ -30,14 +30,14 @@ argument-hint: "股票代码/公司名（可选：期间、年报文件、关注
 Windows（cmd）：
 
 ```bash
-"%PYTHON_EXEC%" stock-server/.stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py --code 600519 --years 6 --out .tmp/600519-statements.json
-"%PYTHON_EXEC%" stock-server/.stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py --name 贵州茅台 --years 6 --out .tmp/600519-statements.json
+"%PYTHON_EXEC%" .stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py --code 600519 --years 6 --out .tmp/600519-statements.json
+"%PYTHON_EXEC%" .stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py --name 贵州茅台 --years 6 --out .tmp/600519-statements.json
 ```
 
 Linux / macOS：
 
 ```bash
-"$PYTHON_EXEC" stock-server/.stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py --code 600519 --years 6 --out .tmp/600519-statements.json
+"$PYTHON_EXEC" .stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py --code 600519 --years 6 --out .tmp/600519-statements.json
 ```
 
 脚本只输出一行摘要（代码、名称、行业、期间、输出路径、警告），完整数据写入 `.tmp/<code>-statements.json`。**不要**把完整 JSON 打印到对话里；需要核对时用 `read_file` 读取该文件的具体片段。
@@ -49,7 +49,7 @@ Linux / macOS：
 ### 3. 计算与诊断
 
 ```bash
-"%PYTHON_EXEC%" stock-server/.stock/skills/enterprise-statement-analysis/scripts/analyze_statements.py --input .tmp/600519-statements.json --brief
+"%PYTHON_EXEC%" .stock/skills/enterprise-statement-analysis/scripts/analyze_statements.py --input .tmp/600519-statements.json --brief
 ```
 
 快速判断用 `--brief`：只输出最新期指标、信号、数据缺口和待核实问题，token 更省；需要多年趋势表时去掉 `--brief`。

@@ -85,22 +85,22 @@ metadata:
 
 本技能目录（下文简称"技能目录"）：
 ```
-stock-server/.stock/skills/stock-analysis
+.stock/skills/stock-analysis
 ```
 如果本 SKILL.md 是从别的目录加载的，把下面命令里的这个前缀换成实际所在目录即可。
 
 1. 需要了解参数或排错时，再读取脚本：
 ```
-file_read("stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py")
+file_read(".stock/skills/stock-analysis/references/stock_data_fetcher.py")
 ```
 
 2. 运行（工作目录 = 仓库根目录；路径统一用 `/` 分隔，Windows 和 Linux 都支持）：
 ```bash
 # Windows (cmd)
-python stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+python .stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 
 # Linux / macOS（没有 python 就用 python3）
-python3 stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+python3 .stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 ```
 - 服务端已注入 `PYTHON_EXEC`，也可直接用它：Windows `%PYTHON_EXEC%`，Linux/macOS `"$PYTHON_EXEC"`。
 - `--days` 默认 120；`--news` 仅在配置了 Tavily/SerpAPI Key 时才真正联网搜索。
@@ -108,10 +108,10 @@ python3 stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.
 3. 出现 ImportError（缺少依赖）时，用当前平台的解释器安装后重试（不要用 `pip3`，统一用 `python -m pip`）：
 ```bash
 # Windows (cmd)
-python -m pip install akshare yfinance efinance --quiet && python stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+python -m pip install akshare yfinance efinance --quiet && python .stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 
 # Linux / macOS
-python3 -m pip install akshare yfinance efinance --quiet && python3 stock-server/.stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
+python3 -m pip install akshare yfinance efinance --quiet && python3 .stock/skills/stock-analysis/references/stock_data_fetcher.py --stocks "CODE1,CODE2,CODE3" --news
 ```
 
 4. 脚本输出 JSON，包含：每只股票的实时行情、技术指标、综合评分、使用的数据源、新闻（如有 API Key）。
@@ -148,7 +148,7 @@ python3 -m pip install akshare yfinance efinance --quiet && python3 stock-server
 
 1. 读取分析框架：
 ```
-file_read("stock-server/.stock/skills/stock-analysis/references/analysis-prompt-template.md")
+file_read(".stock/skills/stock-analysis/references/analysis-prompt-template.md")
 ```
 
 2. 按照框架，对每只股票进行综合分析：
@@ -166,7 +166,7 @@ file_read("stock-server/.stock/skills/stock-analysis/references/analysis-prompt-
 
 1. 读取格式模板：
 ```
-file_read("stock-server/.stock/skills/stock-analysis/references/output-format-template.md")
+file_read(".stock/skills/stock-analysis/references/output-format-template.md")
 ```
 
 2. 按模板格式输出完整决策看板，包含：

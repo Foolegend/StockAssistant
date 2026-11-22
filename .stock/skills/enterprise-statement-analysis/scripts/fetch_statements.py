@@ -5,7 +5,7 @@
 The script prints a short summary and writes one normalized JSON file.  Run it
 from the repository root:
 
-    python stock-server/.stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py \
+    python .stock/skills/enterprise-statement-analysis/scripts/fetch_statements.py \
         --code 600519 --years 6 --out .tmp/600519-statements.json
 
 Only annual reports are fetched by default.  Consolidated statements are

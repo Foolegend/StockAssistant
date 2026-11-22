@@ -1,4 +1,4 @@
-# StockAssistant 技能脚本 Python 依赖
+﻿# StockAssistant 技能脚本 Python 依赖
 #
 # 注意：Bun 后端本身不依赖 Python。这个文件只用于 `.stock` 中的技能脚本
 # （行情抓取、财报解析、文档处理等）以及 mcp-builder 示例。

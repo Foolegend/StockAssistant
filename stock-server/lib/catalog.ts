@@ -134,8 +134,21 @@ function readJson<T>(file: string): T | null {
   }
 }
 
+/**
+ * Extension directory resolution.
+ *
+ * The CLI's project-config dir is `.stock`, so the repository root is the
+ * preferred location. Keep the old `stock-server/.stock` path as a fallback
+ * for checkouts that have not moved it yet.
+ */
+export function resolveExtensionRoot(repoRoot: string): string {
+  const root = join(repoRoot, '.stock');
+  const legacy = join(repoRoot, 'stock-server', '.stock');
+  return existsSync(root) ? root : existsSync(legacy) ? legacy : root;
+}
+
 export function loadStockExtensions(repoRoot: string): StockExtensions {
-  const extensionRoot = join(repoRoot, 'stock-server', '.stock');
+  const extensionRoot = resolveExtensionRoot(repoRoot);
   const commandBodies = new Map<string, string>();
   const skillBodies = new Map<string, string>();
   const agentBodies = new Map<string, string>();

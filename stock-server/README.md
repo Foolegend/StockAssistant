@@ -108,7 +108,7 @@ src/                 StockAssistant source snapshot (~1,900 files, 512k+ lines)
 compat/              Runtime replacements for build-time and private modules
 lib/                 .stock extension scanner (catalog / frontmatter)
 terminal/            PTY + WebSocket session server
-.stock/              Agents, skills, commands, hooks and MCP configs
+../.stock/           Agents, skills, commands, hooks and MCP configs (repo root)
 package.json         Dependencies and start scripts
 tsconfig.json        Path aliases and JSX configuration
 ```
