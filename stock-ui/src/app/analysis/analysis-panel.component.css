@@ -45,6 +45,21 @@
   background: #4ade80;
 }
 
+.analysis-dot.running {
+  background: #facc15;
+  animation: analysis-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes analysis-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .analysis-heading {
   display: flex;
   flex-direction: column;
@@ -95,6 +110,92 @@
   color: #64748b;
   font-size: 13px;
   line-height: 1.7;
+}
+
+.analysis-running {
+  margin: 0 0 14px;
+  color: #facc15;
+  font-size: 12px;
+}
+
+.analysis-process {
+  margin-bottom: 22px;
+}
+
+.analysis-process-title,
+.analysis-answer-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin: 0 0 8px;
+}
+
+.analysis-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step {
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #0b1220;
+}
+
+.step.user {
+  border-color: #1e3a5f;
+  background: #0c1522;
+}
+
+.step.thought {
+  border-color: #3f3a1e;
+}
+
+.step.failed {
+  border-color: #7f1d1d;
+}
+
+.step-label {
+  display: block;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.step-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #cbd5e1;
+}
+
+.step pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #cbd5e1;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.step .analysis-content {
+  font-size: 12px;
+}
+
+.analysis-answer {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid #1f2937;
 }
 
 .analysis-error {

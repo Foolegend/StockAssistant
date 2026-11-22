@@ -1,7 +1,11 @@
 <section class="analysis-panel">
   <header class="analysis-header">
     <div class="analysis-title">
-      <span class="analysis-dot" [class.ready]="!!answer"></span>
+      <span
+        class="analysis-dot"
+        [class.ready]="!!answer"
+        [class.running]="running"
+      ></span>
       <div class="analysis-heading">
         <strong>分析结果</strong>
         <span class="analysis-meta">{{ metaText }}</span>
@@ -22,12 +26,77 @@
       <p class="analysis-empty">选择或新建一个会话后，分析结果会显示在这里。</p>
     } @else if (error) {
       <p class="analysis-error">{{ error }}</p>
-    } @else if (answer) {
-      <article class="analysis-content" [innerHTML]="answer | markdown"></article>
     } @else {
-      <p class="analysis-empty">
-        在终端中提问后，最终分析结果会以网页形式显示在这里。
-      </p>
+      @if (running && !answer) {
+        <p class="analysis-running">分析进行中，过程会实时更新…</p>
+      }
+
+      @if (steps.length) {
+        <section class="analysis-process">
+          <div class="analysis-process-title">分析过程</div>
+          <ol class="analysis-steps">
+            @for (step of steps; track $index) {
+              @switch (step.kind) {
+                @case ('user') {
+                  <li class="step user">
+                    <span class="step-label">你的问题</span>
+                    <p class="step-text">{{ step.text }}</p>
+                  </li>
+                }
+                @case ('thought') {
+                  <li class="step thought">
+                    <span class="step-label">思考</span>
+                    <p class="step-text">{{ step.text }}</p>
+                  </li>
+                }
+                @case ('tool_start') {
+                  <li class="step tool">
+                    <span class="step-label">调用工具 · {{ step.tool }}</span>
+                    @if (step.args) {
+                      <pre>{{ step.args }}</pre>
+                    }
+                  </li>
+                }
+                @case ('tool_end') {
+                  <li class="step tool" [class.failed]="step.error">
+                    <span class="step-label">
+                      工具结果{{ step.error ? '（失败）' : '' }}
+                    </span>
+                    @if (step.output) {
+                      <pre>{{ step.output }}</pre>
+                    }
+                  </li>
+                }
+                @case ('text') {
+                  <li class="step text">
+                    <span class="step-label">阶段输出</span>
+                    <article
+                      class="analysis-content"
+                      [innerHTML]="step.text | markdown"
+                    ></article>
+                  </li>
+                }
+              }
+            }
+          </ol>
+        </section>
+      }
+
+      @if (answer) {
+        <section class="analysis-answer">
+          <div class="analysis-answer-title">最终结论</div>
+          <article
+            class="analysis-content"
+            [innerHTML]="answer | markdown"
+          ></article>
+        </section>
+      }
+
+      @if (!steps.length && !answer && !running) {
+        <p class="analysis-empty">
+          在终端中提问后，思考过程与最终分析结果会显示在这里。
+        </p>
+      }
     }
   </div>
 </section>

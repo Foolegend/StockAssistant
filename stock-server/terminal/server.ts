@@ -157,7 +157,24 @@ interface AnalysisMessage {
   timestamp: string | null;
 }
 
-function contentToText(content: unknown): string {
+interface AnalysisStep {
+  kind: 'user' | 'thought' | 'tool_start' | 'tool_end' | 'text';
+  text?: string;
+  tool?: string;
+  tool_id?: string;
+  args?: string;
+  output?: string;
+  error?: boolean;
+  timestamp: string | null;
+}
+
+const MAX_STEP_CHARS = 4000;
+
+function truncateText(value: string, max = MAX_STEP_CHARS): string {
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+function textBlocks(content: unknown): string {
   if (typeof content === 'string') return content.trim();
   if (Array.isArray(content)) {
     return content
@@ -166,6 +183,7 @@ function contentToText(content: unknown): string {
         const item = block as { type?: unknown; text?: unknown };
         return item.type === 'text' ? String(item.text ?? '') : '';
       })
+      .filter(Boolean)
       .join('\n')
       .trim();
   }
@@ -173,20 +191,32 @@ function contentToText(content: unknown): string {
 }
 
 /**
- * Extracts the user/assistant text from the CLI's session transcript. Tool
- * results, thinking blocks and sidechain messages are ignored; the last
- * assistant text is the final analysis answer.
+ * Extracts the last turn's analysis process (thoughts, tool calls and tool
+ * results) plus the final assistant answer from the CLI transcript.
  */
 function readAnalysis(id: string): {
   answer: string | null;
   updated_at: string | null;
+  steps: AnalysisStep[];
   messages: AnalysisMessage[];
+  turnRunning: boolean;
 } {
+  const empty = {
+    answer: null,
+    updated_at: null,
+    steps: [] as AnalysisStep[],
+    messages: [] as AnalysisMessage[],
+    turnRunning: false,
+  };
   const file = findCliSessionPath(id);
-  if (!file) return { answer: null, updated_at: null, messages: [] };
+  if (!file) return empty;
 
+  const steps: AnalysisStep[] = [];
   const messages: AnalysisMessage[] = [];
   let lastTimestamp: string | null = null;
+  let lastAssistantStepIndex = -1;
+  let lastAssistantStopReason: string | null = null;
+
   try {
     for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -198,25 +228,149 @@ function readAnalysis(id: string): {
       }
       if (record.type !== 'user' && record.type !== 'assistant') continue;
       if (record.isSidechain === true) continue;
-      const inner = record.message as { content?: unknown } | undefined;
-      const content = contentToText(inner?.content);
-      if (!content) continue;
+
       const timestamp =
         typeof record.timestamp === 'string' ? record.timestamp : null;
-      messages.push({ role: record.type, content, timestamp });
       if (timestamp) lastTimestamp = timestamp;
+      const inner = record.message as {
+        content?: unknown;
+        stop_reason?: unknown;
+      } | undefined;
+      const content = inner?.content;
+
+      if (record.type === 'user') {
+        if (typeof content === 'string') {
+          const text = content.trim();
+          if (text) {
+            steps.push({ kind: 'user', text, timestamp });
+            messages.push({ role: 'user', content: text, timestamp });
+          }
+        } else if (Array.isArray(content)) {
+          for (const block of content) {
+            if (!block || typeof block !== 'object') continue;
+            const item = block as {
+              type?: unknown;
+              text?: unknown;
+              tool_use_id?: unknown;
+              content?: unknown;
+              is_error?: unknown;
+            };
+            if (item.type === 'tool_result') {
+              const output = truncateText(
+                stripAnsi(textBlocks(item.content)),
+              );
+              steps.push({
+                kind: 'tool_end',
+                tool_id: String(item.tool_use_id ?? ''),
+                output,
+                error: item.is_error === true,
+                timestamp,
+              });
+            }
+            // Text blocks in user records are CLI-injected context (for
+            // example a skill body), not the user's own prompt; ignore them.
+          }
+        }
+        continue;
+      }
+
+      // assistant
+      lastAssistantStepIndex = steps.length;
+      lastAssistantStopReason =
+        typeof inner?.stop_reason === 'string' ? inner.stop_reason : null;
+
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== 'object') continue;
+          const item = block as {
+            type?: unknown;
+            thinking?: unknown;
+            text?: unknown;
+            id?: unknown;
+            name?: unknown;
+            input?: unknown;
+          };
+          if (item.type === 'thinking') {
+            const text = String(item.thinking ?? '').trim();
+            if (text) {
+              steps.push({
+                kind: 'thought',
+                text: truncateText(text),
+                timestamp,
+              });
+            }
+          } else if (item.type === 'text') {
+            const text = String(item.text ?? '').trim();
+            if (text) {
+              steps.push({ kind: 'text', text, timestamp });
+              messages.push({ role: 'assistant', content: text, timestamp });
+            }
+          } else if (item.type === 'tool_use') {
+            steps.push({
+              kind: 'tool_start',
+              tool: String(item.name ?? 'tool'),
+              tool_id: String(item.id ?? ''),
+              args: truncateText(JSON.stringify(item.input ?? {}), 2000),
+              timestamp,
+            });
+          }
+        }
+      } else if (typeof content === 'string') {
+        const text = content.trim();
+        if (text) {
+          steps.push({ kind: 'text', text, timestamp });
+          messages.push({ role: 'assistant', content: text, timestamp });
+        }
+      }
     }
   } catch {
-    return { answer: null, updated_at: null, messages: [] };
+    return empty;
   }
 
-  const assistant = [...messages]
-    .reverse()
-    .find((message) => message.role === 'assistant');
+  // Keep only the latest turn's process (starting at its user prompt).
+  let lastUserIndex = -1;
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (steps[index].kind === 'user') {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  let turnSteps =
+    lastUserIndex >= 0 ? steps.slice(lastUserIndex) : steps.slice(-80);
+
+  const hasAssistantAfterUser = lastAssistantStepIndex > lastUserIndex;
+  const turnRunning =
+    !hasAssistantAfterUser || lastAssistantStopReason === 'tool_use';
+
+  // Only a completed turn has a final answer. While tools are still running,
+  // assistant text is shown in the process timeline as an interim output.
+  let answer: string | null = null;
+  let answerTimestamp: string | null = null;
+  let answerIndex = -1;
+  if (!turnRunning) {
+    for (let index = turnSteps.length - 1; index >= 0; index -= 1) {
+      const step = turnSteps[index];
+      if (step.kind === 'text' && step.text) {
+        answer = step.text;
+        answerTimestamp = step.timestamp;
+        answerIndex = index;
+        break;
+      }
+    }
+    if (answerIndex >= 0) {
+      turnSteps = turnSteps.filter((_, index) => index !== answerIndex);
+    }
+  }
+  if (turnSteps.length > 80) {
+    turnSteps = turnSteps.slice(-80);
+  }
+
   return {
-    answer: assistant?.content ?? null,
-    updated_at: assistant?.timestamp ?? lastTimestamp,
+    answer,
+    updated_at: answerTimestamp ?? lastTimestamp,
+    steps: turnSteps,
     messages,
+    turnRunning,
   };
 }
 
@@ -492,7 +646,14 @@ const server = Bun.serve<SocketData>({
     const analysisMatch = /^\/sessions\/([^/]+)\/analysis$/.exec(url.pathname);
     if (method === 'GET' && analysisMatch) {
       const id = decodeURIComponent(analysisMatch[1]);
-      return json(readAnalysis(id));
+      const analysis = readAnalysis(id);
+      return json({
+        answer: analysis.answer,
+        updated_at: analysis.updated_at,
+        steps: analysis.steps,
+        messages: analysis.messages,
+        running: (sessions.get(id)?.alive ?? false) && analysis.turnRunning,
+      });
     }
 
     const outputMatch = /^\/sessions\/([^/]+)\/output$/.exec(url.pathname);

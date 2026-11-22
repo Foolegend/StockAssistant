@@ -15,10 +15,23 @@ interface AnalysisMessage {
   timestamp: string | null;
 }
 
+interface AnalysisStep {
+  kind: 'user' | 'thought' | 'tool_start' | 'tool_end' | 'text';
+  text?: string;
+  tool?: string;
+  tool_id?: string;
+  args?: string;
+  output?: string;
+  error?: boolean;
+  timestamp: string | null;
+}
+
 interface AnalysisResponse {
   answer: string | null;
   updated_at: string | null;
+  steps: AnalysisStep[];
   messages: AnalysisMessage[];
+  running?: boolean;
 }
 
 /**
@@ -39,6 +52,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   answer: string | null = null;
   updatedAt: string | null = null;
+  steps: AnalysisStep[] = [];
+  running = false;
   loading = false;
   error: string | null = null;
 
@@ -64,6 +79,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   get metaText(): string {
     if (this.error) return '读取失败';
+    if (this.running) return '分析中…';
     if (this.updatedAt) {
       const date = new Date(this.updatedAt);
       return Number.isNaN(date.getTime())
@@ -81,6 +97,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
     this.answer = null;
     this.updatedAt = null;
+    this.steps = [];
+    this.running = false;
     this.error = null;
     this.loading = Boolean(this.sessionId);
     this.cdr.markForCheck();
@@ -105,6 +123,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
       this.answer = body.answer ?? null;
       this.updatedAt = body.updated_at ?? null;
+      this.steps = Array.isArray(body.steps) ? body.steps : [];
+      this.running = body.running === true;
       this.error = null;
     } catch {
       if (!this.disposed && this.sessionId === id) {
