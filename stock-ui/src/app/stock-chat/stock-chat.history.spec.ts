@@ -82,6 +82,13 @@ describe('StockChatComponent server history', () => {
               content: '参考 [公告](https://example.com/a)',
               sources: [{ title: '公告', url: 'https://example.com/a' }],
               created_at: '2026-11-20T12:00:05Z',
+              metadata: {
+                usage: {
+                  command: { id: 'stock-report', name: '/stock-report' },
+                  skills: [{ id: 'stock-analysis', name: 'stock-analysis' }],
+                  mcp_servers: [{ id: 'quant-tools', name: 'quant-tools' }],
+                },
+              },
             },
           ],
         },
@@ -98,7 +105,10 @@ describe('StockChatComponent server history', () => {
     expect(conversation.messages[0].role).toBe('user');
     expect(conversation.messages[1].content).toContain('公告');
     expect(conversation.messages[1].sources?.[0].url).toBe('https://example.com/a');
+    expect(conversation.messages[1].usage?.command?.id).toBe('stock-report');
     expect(fixture.nativeElement.textContent).toContain('分析 TSLA');
+    expect(fixture.nativeElement.textContent).toContain('命令 · /stock-report');
+    expect(fixture.nativeElement.textContent).toContain('MCP · quant-tools');
   });
 
   it('treats a missing server record as an empty local conversation', async () => {

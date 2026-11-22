@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS thread_messages (
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (thread_id, seq)
 );
 
@@ -57,21 +58,29 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 
 
 def _migrate_thread_messages(connection: sqlite3.Connection) -> None:
-    """Add the timestamp column to databases created before it existed."""
+    """Bring databases created before newer columns up to date."""
     columns = {
         row[1] for row in connection.execute("PRAGMA table_info(thread_messages)")
     }
-    if "created_at" in columns:
-        return
-    connection.execute(
-        "ALTER TABLE thread_messages ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
-    )
-    connection.execute(
-        "UPDATE thread_messages SET created_at = ? WHERE created_at = ''",
-        (utc_now(),),
-    )
-    connection.commit()
-    logger.info("thread_messages gained a created_at column")
+    changed = False
+    if "created_at" not in columns:
+        connection.execute(
+            "ALTER TABLE thread_messages ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
+        )
+        connection.execute(
+            "UPDATE thread_messages SET created_at = ? WHERE created_at = ''",
+            (utc_now(),),
+        )
+        changed = True
+        logger.info("thread_messages gained a created_at column")
+    if "metadata" not in columns:
+        connection.execute(
+            "ALTER TABLE thread_messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'"
+        )
+        changed = True
+        logger.info("thread_messages gained a metadata column")
+    if changed:
+        connection.commit()
 
 
 def _db_path() -> str:

@@ -1,0 +1,271 @@
+<div
+  class="modal-backdrop"
+  role="dialog"
+  aria-modal="true"
+  aria-label="扩展能力"
+  (click)="close()"
+>
+  <div class="modal capability-modal" (click)="$event.stopPropagation()">
+    <header class="modal-header">
+      <div>
+        <h2>能力</h2>
+        <p>查看已加载的命令、技能、智能体、MCP 与钩子。点击命令或技能可填入输入框。</p>
+      </div>
+      <button class="modal-close" type="button" (click)="close()" aria-label="关闭">
+        ✕
+      </button>
+    </header>
+
+    <div class="capability-toolbar">
+      <nav class="capability-tabs" role="tablist" aria-label="能力分类">
+        @for (tab of tabs; track tab.id) {
+          <button
+            type="button"
+            role="tab"
+            class="capability-tab"
+            [class.active]="activeTab === tab.id"
+            [attr.aria-selected]="activeTab === tab.id"
+            (click)="selectTab(tab.id)"
+          >
+            {{ tab.label }}
+            <span class="capability-tab-count">{{ countFor(tab.id) }}</span>
+          </button>
+        }
+      </nav>
+      <input
+        class="capability-search"
+        type="search"
+        [(ngModel)]="search"
+        placeholder="搜索能力…"
+        aria-label="搜索能力"
+      />
+      <button class="capability-refresh" type="button" (click)="refresh()">
+        刷新
+      </button>
+    </div>
+
+    @if (error) {
+      <div class="modal-error" role="alert">{{ error }}</div>
+    }
+    @if (conflicts.length) {
+      <p class="capability-conflict">
+        以下名称同时被命令和技能使用，斜杠调用时命令优先：
+        {{ conflictNames() }}
+      </p>
+    }
+
+    @if (loading && !catalog) {
+      <p class="modal-hint">正在加载能力…</p>
+    } @else if (catalog) {
+      <div class="capability-body">
+        @switch (activeTab) {
+          @case ('commands') {
+            @if (commands.length) {
+              <ul class="capability-list">
+                @for (item of commands; track item.id) {
+                  <li class="capability-item">
+                    <button
+                      type="button"
+                      class="capability-row"
+                      [disabled]="!canPick(item)"
+                      (click)="pick('command', item.id)"
+                    >
+                      <span class="capability-title">
+                        <span class="capability-kind command">命令</span>
+                        <span class="capability-name">/{{ item.id }}</span>
+                        @if (item.argument_hint) {
+                          <span class="capability-hint">{{ item.argument_hint }}</span>
+                        }
+                        @if (!item.enabled) {
+                          <span class="capability-badge off">已停用</span>
+                        } @else if (!item.user_invocable) {
+                          <span class="capability-badge off">不可手动调用</span>
+                        }
+                      </span>
+                      <span class="capability-description">
+                        {{ item.description || '未提供描述' }}
+                      </span>
+                      @if (item.when_to_use) {
+                        <span class="capability-when">适用：{{ item.when_to_use }}</span>
+                      }
+                      <span class="capability-meta">
+                        @if (item.agent_id) {
+                          <span>智能体 · {{ item.agent_id }}</span>
+                        }
+                        @for (skill of item.skills; track skill.id) {
+                          <span>技能 · {{ skill.name }}</span>
+                        }
+                        @for (server of item.mcp_servers; track server.id) {
+                          <span>MCP · {{ server.name }}</span>
+                        }
+                        @if (item.file_path) {
+                          <span class="capability-path">{{ item.file_path }}</span>
+                        }
+                      </span>
+                    </button>
+                  </li>
+                }
+              </ul>
+            } @else {
+              <p class="modal-empty">
+                还没有命令。在 stock-server/.stock/commands/ 下新增 Markdown 文件即可。
+              </p>
+            }
+          }
+          @case ('skills') {
+            @if (skills.length) {
+              <ul class="capability-list">
+                @for (item of skills; track item.id) {
+                  <li class="capability-item">
+                    <button
+                      type="button"
+                      class="capability-row"
+                      [disabled]="!canPick(item)"
+                      (click)="pick('skill', item.id)"
+                    >
+                      <span class="capability-title">
+                        <span class="capability-kind skill">技能</span>
+                        <span class="capability-name">/{{ item.id }}</span>
+                        @if (item.version) {
+                          <span class="capability-badge">v{{ item.version }}</span>
+                        }
+                        @if (!item.enabled) {
+                          <span class="capability-badge off">已停用</span>
+                        } @else if (!item.user_invocable) {
+                          <span class="capability-badge off">不可手动调用</span>
+                        }
+                      </span>
+                      <span class="capability-description">
+                        {{ item.description || '未提供描述' }}
+                      </span>
+                      @if (item.when_to_use) {
+                        <span class="capability-when">适用：{{ item.when_to_use }}</span>
+                      }
+                      <span class="capability-meta">
+                        @if (item.aliases.length > 1) {
+                          <span>别名 · {{ item.aliases.join(' / ') }}</span>
+                        }
+                        @if (allowedTools(item.allowed_tools)) {
+                          <span>工具 · {{ allowedTools(item.allowed_tools) }}</span>
+                        }
+                        @if (item.file_path) {
+                          <span class="capability-path">{{ item.file_path }}</span>
+                        }
+                      </span>
+                    </button>
+                  </li>
+                }
+              </ul>
+            } @else {
+              <p class="modal-empty">没有匹配的技能。</p>
+            }
+          }
+          @case ('agents') {
+            @if (agents.length) {
+              <ul class="capability-list">
+                @for (item of agents; track item.id) {
+                  <li class="capability-item">
+                    <div class="capability-row static">
+                      <span class="capability-title">
+                        <span class="capability-kind agent">智能体</span>
+                        <span class="capability-name">{{ item.name }}</span>
+                        @if (!item.enabled) {
+                          <span class="capability-badge off">已停用</span>
+                        }
+                      </span>
+                      <span class="capability-description">
+                        {{ item.description || '未提供描述' }}
+                      </span>
+                      <span class="capability-meta">
+                        @for (skill of item.skills; track skill.id) {
+                          <span>技能 · {{ skill.name }}</span>
+                        }
+                        @for (server of item.mcp_servers; track server.id) {
+                          <span>MCP · {{ server.name }}</span>
+                        }
+                        @if (item.file_path) {
+                          <span class="capability-path">{{ item.file_path }}</span>
+                        }
+                      </span>
+                    </div>
+                  </li>
+                }
+              </ul>
+            } @else {
+              <p class="modal-empty">没有匹配的智能体。</p>
+            }
+          }
+          @case ('mcp') {
+            @if (mcpServers.length) {
+              <ul class="capability-list">
+                @for (item of mcpServers; track item.id) {
+                  <li class="capability-item">
+                    <div class="capability-row static">
+                      <span class="capability-title">
+                        <span class="capability-kind mcp">MCP</span>
+                        <span class="capability-name">{{ item.name }}</span>
+                        <span
+                          class="capability-status-dot"
+                          [class.connected]="item.status === 'connected'"
+                          [class.error]="item.status === 'error'"
+                          aria-hidden="true"
+                        ></span>
+                        <span class="capability-status">{{ statusLabel(item) }}</span>
+                      </span>
+                      <span class="capability-description">
+                        {{ item.description || '未提供描述' }}
+                      </span>
+                      <span class="capability-meta">
+                        <span>{{ item.transport }}</span>
+                        @if (item.file_path) {
+                          <span class="capability-path">{{ item.file_path }}</span>
+                        }
+                      </span>
+                      @if (item.error) {
+                        <span class="capability-error">{{ item.error }}</span>
+                      }
+                      @if (item.tools.length) {
+                        <details class="capability-tools">
+                          <summary>工具列表（{{ item.tool_count }}）</summary>
+                          <ul>
+                            @for (tool of item.tools; track tool) {
+                              <li>{{ tool }}</li>
+                            }
+                          </ul>
+                        </details>
+                      }
+                    </div>
+                  </li>
+                }
+              </ul>
+            } @else {
+              <p class="modal-empty">没有匹配的 MCP server。</p>
+            }
+          }
+          @case ('hooks') {
+            @if (hooks.length) {
+              <ul class="capability-list">
+                @for (item of hooks; track item.id) {
+                  <li class="capability-item">
+                    <div class="capability-row static">
+                      <span class="capability-title">
+                        <span class="capability-kind hook">钩子</span>
+                        <span class="capability-name">{{ item.name }}</span>
+                        <span class="capability-badge">{{ item.event }}</span>
+                        @if (!item.enabled) {
+                          <span class="capability-badge off">已停用</span>
+                        }
+                      </span>
+                    </div>
+                  </li>
+                }
+              </ul>
+            } @else {
+              <p class="modal-empty">没有匹配的钩子。</p>
+            }
+          }
+        }
+      </div>
+    }
+  </div>
+</div>

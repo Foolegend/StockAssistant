@@ -27,10 +27,14 @@ from src.runtime.logging_config import (
     request_context,
     setup_logging,
 )
-from src.services.component_dependencies import resolve_component_dependencies
+from src.services.component_dependencies import (
+    ResolvedComponents,
+    resolve_component_dependencies,
+)
 from src.services.component_router import select_components
 from src.services.extension_registry import ExtensionRegistry
 from src.services.hook_runner import HookExecutionError, HookRunner
+from src.services.slash_commands import SlashCommandError, plan_slash_invocation
 from src.services import retention
 from src.services.db import utc_now
 from src.services.thread_history import (
@@ -242,10 +246,46 @@ def _direct_response(thread_id: str, answer: str) -> dict:
             "answer": answer,
             "sources": _extract_sources(answer),
             "agent_id": None,
+            "agent": None,
+            "command": None,
             "skills": [],
+            "mcp_servers": [],
             "model": None,
             "thread_id": thread_id,
         },
+    }
+
+
+def _usage_payload(
+    agent_id: str | None,
+    command: dict | None,
+    skill_ids: list[str],
+    mcp_server_ids: list[str],
+) -> dict:
+    """Capabilities used by this turn, shared by SSE and the final payload."""
+    return {
+        "agent_id": agent_id,
+        "agent": (
+            {
+                "id": agent_id,
+                "name": extension_registry.agents[agent_id]["name"],
+            }
+            if agent_id in extension_registry.agents
+            else None
+        ),
+        "command": (
+            {"id": command["id"], "name": command["name"]} if command else None
+        ),
+        "skills": [
+            {"id": skill_id, "name": extension_registry.skills[skill_id]["name"]}
+            for skill_id in skill_ids
+            if skill_id in extension_registry.skills
+        ],
+        "mcp_servers": [
+            {"id": server_id, "name": extension_registry.mcp_servers[server_id]["name"]}
+            for server_id in mcp_server_ids
+            if server_id in extension_registry.mcp_servers
+        ],
     }
 
 
@@ -280,10 +320,61 @@ def _run_agent_chat(
         req.thread_id,
         preview(req.question),
     )
-    report("status", {"stage": "routing", "message": "正在判断问题需要哪些分析能力"})
+    try:
+        slash_plan = plan_slash_invocation(req.question, extension_registry)
+    except SlashCommandError as error:
+        logger.warning("slash command rejected: %s", error)
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    question = slash_plan.question if slash_plan is not None else req.question
+    if slash_plan is not None:
+        invocation = slash_plan.invocation
+        report(
+            "status",
+            {
+                "stage": "routing",
+                "message": (
+                    f"正在执行命令 {invocation.name}"
+                    if invocation.kind == "command"
+                    else f"正在加载技能 {invocation.name}"
+                ),
+                **(
+                    {"command": {"id": invocation.id, "name": invocation.name}}
+                    if invocation.kind == "command"
+                    else {
+                        "skills": [
+                            {"id": invocation.id, "name": invocation.name}
+                        ]
+                    }
+                ),
+            },
+        )
+    else:
+        report("status", {"stage": "routing", "message": "正在判断问题需要哪些分析能力"})
+
     selection = None
     resolved = None
-    if _is_greeting_only(req.question):
+    if slash_plan is not None:
+        selection = slash_plan.selection
+        if selection.agent_id or selection.skill_ids or selection.mcp_server_ids:
+            try:
+                routing_model = make_llm(temperature=0)
+                resolved = resolve_component_dependencies(
+                    question,
+                    selection,
+                    extension_registry,
+                    routing_model,
+                )
+            except ValueError as error:
+                logger.exception("slash command dependency resolution failed")
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Component routing failed: {error}",
+                ) from error
+        else:
+            # A command with only a prompt still needs the agent path.
+            resolved = ResolvedComponents([], [], [])
+    elif _is_greeting_only(req.question):
         logger.info(
             "chat greeting bypassed component routing thread_id=%s",
             req.thread_id,
@@ -367,16 +458,21 @@ def _run_agent_chat(
     if was_stopped():
         return None
 
-    # Pin only the router's direct skill choices, not their dependencies such
-    # as pdf/xlsx.  The selected SKILL.md body is injected before the first
-    # model call, so an old thread's workflow cannot silently take over.
-    pinned_skill_names = [
-        extension_registry.skills[skill_id]["name"]
-        for skill_id in (selection.skill_ids or [])
-        if skill_id in extension_registry.skills
-    ]
+    # Pin only the router's or command's direct skill choices, not their
+    # dependencies such as pdf/xlsx.  The selected SKILL.md body is injected
+    # before the first model call, so an old thread's workflow cannot silently
+    # take over.
+    if slash_plan is not None:
+        pinned_skill_names = list(dict.fromkeys(slash_plan.pinned_skills))
+    else:
+        pinned_skill_names = [
+            extension_registry.skills[skill_id]["name"]
+            for skill_id in (selection.skill_ids or [])
+            if skill_id in extension_registry.skills
+        ]
     if pinned_skill_names:
         logger.info("routing pinned skills=%s", pinned_skill_names)
+    command = slash_plan.command if slash_plan is not None else None
 
     if selection.agent_id is not None:
         agent = extension_registry.agents.get(selection.agent_id)
@@ -417,12 +513,17 @@ def _run_agent_chat(
         config.mcp_servers,
     )
 
-    question = req.question
     hook_context = {
         "question": req.question,
         "agent_id": agent_id,
         "thread_id": req.thread_id,
     }
+    usage = _usage_payload(
+        agent_id,
+        command,
+        resolved.skill_ids,
+        resolved.mcp_server_ids,
+    )
     report(
         "status",
         {
@@ -430,11 +531,7 @@ def _run_agent_chat(
             "message": "正在分析问题"
             if not config.mcp_servers
             else "正在分析问题，需要时会调用数据工具",
-            "agent_id": agent_id,
-            "skills": [
-                {"id": skill_id, "name": extension_registry.skills[skill_id]["name"]}
-                for skill_id in resolved.skill_ids
-            ],
+            **usage,
         },
     )
     try:
@@ -462,12 +559,18 @@ def _run_agent_chat(
         # Keep the shared history in step with the agent's own checkpoints so
         # that a later direct answer still knows what the thread discussed.
         append_messages(req.thread_id, "user", req.question)
-        append_messages(req.thread_id, "assistant", answer)
+        append_messages(
+            req.thread_id,
+            "assistant",
+            answer,
+            metadata={"usage": usage},
+        )
         _extract_preferences(req.question, answer)
         logger.info(
-            "chat answer thread_id=%s agent=%s chars=%d answer=%s",
+            "chat answer thread_id=%s agent=%s command=%s chars=%d answer=%s",
             req.thread_id,
             agent_id,
+            command["id"] if command else None,
             len(answer),
             preview(answer),
         )
@@ -511,11 +614,7 @@ def _run_agent_chat(
         "data": {
             "answer": answer,
             "sources": _extract_sources(answer),
-            "agent_id": agent_id,
-            "skills": [
-                {"id": skill_id, "name": extension_registry.skills[skill_id]["name"]}
-                for skill_id in resolved.skill_ids
-            ],
+            **usage,
             "model": config.model_name,
             "thread_id": req.thread_id,
         },

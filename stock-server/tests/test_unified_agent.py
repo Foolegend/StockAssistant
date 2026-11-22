@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import sys
 import tempfile
@@ -14,6 +16,7 @@ from src.agent.UnifiedAgent import (
     AgentConfig,
     PLUGIN_ROOT,
     _ProjectRootShellBackend,
+    _tool_command,
     _to_virtual_tool_path,
     build_agent,
     make_llm,
@@ -239,6 +242,43 @@ class UnifiedAgentTests(unittest.TestCase):
                 _to_virtual_tool_path("/tmp/probe.py", project_root),
                 "/.tmp/probe.py",
             )
+
+    def test_execute_tool_command_is_reused_verbatim(self):
+        self.assertEqual(
+            _tool_command("execute", {"command": "python probe.py"}, "/root"),
+            "python probe.py",
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows shell convention")
+    def test_file_tools_get_host_path_commands(self):
+        with tempfile.TemporaryDirectory() as project_root:
+            target = os.path.join(project_root, "stock", "report.md")
+            self.assertEqual(
+                _tool_command(
+                    "read_file",
+                    {"file_path": "/stock/report.md"},
+                    project_root,
+                ),
+                f'type "{target}"',
+            )
+            self.assertEqual(
+                _tool_command("ls", {"path": "/stock"}, project_root),
+                f'dir "{os.path.join(project_root, "stock")}"',
+            )
+
+    def test_mutating_file_tools_have_no_local_command(self):
+        self.assertEqual(_tool_command("write_file", {"file_path": "/x"}, "/root"), "")
+        self.assertEqual(_tool_command("edit_file", {"file_path": "/x"}, "/root"), "")
+
+    def test_quant_tool_command_carries_base64_arguments(self):
+        command = _tool_command("normalize_symbol", {"code": "600519"}, "/root")
+
+        self.assertIn("quant_tool_run.py", command)
+        encoded = command.rsplit(" ", 1)[-1]
+        self.assertEqual(
+            json.loads(base64.b64decode(encoded).decode("utf-8")),
+            {"code": "600519"},
+        )
 
     def test_make_llm_configures_retries_and_timeout(self):
         with patch.dict(

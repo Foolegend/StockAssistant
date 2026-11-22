@@ -92,6 +92,30 @@ class ThreadHistoryTests(unittest.TestCase):
         )
         self.assertTrue(all(item["created_at"] for item in messages))
 
+    def test_message_metadata_round_trips(self):
+        append_messages(
+            "t1",
+            "assistant",
+            "答复",
+            metadata={
+                "usage": {
+                    "command": {"id": "stock-report", "name": "/stock-report"},
+                    "skills": [{"id": "stock-analysis", "name": "stock-analysis"}],
+                }
+            },
+        )
+
+        messages = load_messages("t1")
+
+        self.assertEqual(
+            messages[0]["metadata"]["usage"]["command"]["id"],
+            "stock-report",
+        )
+        self.assertEqual(
+            messages[0]["metadata"]["usage"]["skills"][0]["name"],
+            "stock-analysis",
+        )
+
     def test_threads_are_isolated_from_each_other(self):
         append_messages("t1", "user", "A 的消息")
         append_messages("t2", "user", "B 的消息")

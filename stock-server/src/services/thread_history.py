@@ -11,6 +11,7 @@ when the router sends some turns to an agent and answers others directly.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from src.runtime.logging_config import get_logger
@@ -35,7 +36,12 @@ def close_history_connection() -> None:
     close_connection()
 
 
-def append_messages(thread_id: str, role: str, content: str) -> None:
+def append_messages(
+    thread_id: str,
+    role: str,
+    content: str,
+    metadata: dict | None = None,
+) -> None:
     """Append one message to a thread's history."""
     if not thread_id or not content.strip():
         return
@@ -46,15 +52,17 @@ def append_messages(thread_id: str, role: str, content: str) -> None:
         return
 
     try:
+        serialized = json.dumps(metadata or {}, ensure_ascii=False)
         with connection:
             row = connection.execute(
                 "SELECT COALESCE(MAX(seq), -1) + 1 FROM thread_messages WHERE thread_id = ?",
                 (thread_id,),
             ).fetchone()
             connection.execute(
-                "INSERT INTO thread_messages (thread_id, seq, role, content, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (thread_id, row[0], role, content, utc_now()),
+                "INSERT INTO thread_messages "
+                "(thread_id, seq, role, content, created_at, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (thread_id, row[0], role, content, utc_now(), serialized),
             )
     except Exception:  # noqa: BLE001
         logger.exception("failed to append thread history for %s", thread_id)
@@ -71,7 +79,7 @@ def load_messages(thread_id: str, limit: int = _MAX_HISTORY_MESSAGES) -> list[di
 
     try:
         rows = connection.execute(
-            "SELECT role, content, created_at FROM thread_messages "
+            "SELECT role, content, created_at, metadata FROM thread_messages "
             "WHERE thread_id = ? ORDER BY seq DESC LIMIT ?",
             (thread_id, limit),
         ).fetchall()
@@ -79,10 +87,21 @@ def load_messages(thread_id: str, limit: int = _MAX_HISTORY_MESSAGES) -> list[di
         logger.exception("failed to load thread history for %s", thread_id)
         return []
 
-    return [
-        {"role": role, "content": content, "created_at": created_at}
-        for role, content, created_at in reversed(rows)
-    ]
+    messages = []
+    for role, content, created_at, metadata in reversed(rows):
+        try:
+            parsed = json.loads(metadata) if metadata else {}
+        except (TypeError, ValueError):
+            parsed = {}
+        messages.append(
+            {
+                "role": role,
+                "content": content,
+                "created_at": created_at,
+                "metadata": parsed if isinstance(parsed, dict) else {},
+            }
+        )
+    return messages
 
 
 def list_threads(limit: int = 50, offset: int = 0) -> list[dict]:

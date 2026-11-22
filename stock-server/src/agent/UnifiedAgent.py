@@ -1,7 +1,9 @@
+import base64
 import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from contextlib import contextmanager
@@ -462,6 +464,112 @@ def _format_tool_args(args: object) -> str:
     return _truncate_tool_detail(text)
 
 
+QUANT_TOOL_NAMES = frozenset(
+    {"normalize_symbol", "technical_indicators", "position_plan", "valuation_snapshot"}
+)
+QUANT_TOOL_RUNNER = os.path.join(
+    PROJECT_ROOT, ".stock", "mcp-servers", "quant_tool_run.py"
+)
+
+
+def _quote_shell(value: str) -> str:
+    """Quote one argument for the local shell used by the ``execute`` tool."""
+    if os.name == "nt":
+        return f'"{value}"'
+    return shlex.quote(value)
+
+
+def _host_path(path: str, root: str) -> str:
+    """Resolve a backend virtual path (``/x``) to a host path under ``root``."""
+    if not path:
+        return root
+    # Mirror _to_virtual_tool_path so the displayed command reads the same file
+    # the agent's file tools actually touched.
+    if path == "/tmp" or path.startswith("/tmp/"):
+        path = "/.tmp" + path[len("/tmp") :]
+    drive_match = _POSIX_DRIVE_PATH.match(path)
+    if drive_match:
+        candidate = drive_match.group(1) + ":\\" + path[3:].replace("/", "\\")
+        if _WINDOWS_ABS_PATH.match(candidate):
+            return candidate
+    if _WINDOWS_ABS_PATH.match(path) or not path.startswith("/"):
+        return path
+    return os.path.join(root, path.lstrip("/").replace("/", os.sep))
+
+
+def _tool_command(tool_name: str, args: object, root: str) -> str:
+    """Build a host command that reproduces a read-only tool call locally.
+
+    Commands are best-effort equivalents of the agent's own tools; mutating
+    tools return an empty string because replaying them could overwrite files.
+    """
+    if not isinstance(args, dict):
+        return ""
+
+    def text(key: str) -> str:
+        value = args.get(key)
+        return value if isinstance(value, str) and value.strip() else ""
+
+    windows = os.name == "nt"
+    root = root or PROJECT_ROOT
+
+    if tool_name == "execute":
+        return text("command")
+
+    if tool_name == "ls":
+        path = text("path")
+        if not path:
+            return ""
+        target = _quote_shell(_host_path(path, root))
+        return f"dir {target}" if windows else f"ls -la {target}"
+
+    if tool_name == "read_file":
+        path = text("file_path")
+        if not path:
+            return ""
+        target = _quote_shell(_host_path(path, root))
+        return f"type {target}" if windows else f"cat {target}"
+
+    if tool_name == "grep":
+        pattern = text("pattern")
+        if not pattern:
+            return ""
+        base = _host_path(text("path") or "/", root)
+        file_glob = text("glob")
+        if windows:
+            target = os.path.join(base, file_glob or "*")
+            return f"findstr /s /n /c:{_quote_shell(pattern)} {_quote_shell(target)}"
+        quoted_pattern = _quote_shell(pattern)
+        quoted_base = _quote_shell(base)
+        if file_glob:
+            include = _quote_shell(file_glob)
+            return f"grep -rnF --include={include} {quoted_pattern} {quoted_base}"
+        return f"grep -rnF {quoted_pattern} {quoted_base}"
+
+    if tool_name == "glob":
+        pattern = text("pattern")
+        if not pattern:
+            return ""
+        base = _host_path(text("path") or "/", root)
+        if windows:
+            target = os.path.join(base, pattern.replace("**/", "").replace("/", "\\"))
+            return f"dir /s /b {_quote_shell(target)}"
+        simplified = pattern.replace("**/", "")
+        return f"find {_quote_shell(base)} -name {_quote_shell(simplified)}"
+
+    if tool_name in QUANT_TOOL_NAMES:
+        try:
+            payload = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
+            encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+        except (TypeError, ValueError):
+            return ""
+        python = _quote_shell(sys.executable or "python")
+        runner = _quote_shell(QUANT_TOOL_RUNNER)
+        return f"{python} {runner} {tool_name} {encoded}"
+
+    return ""
+
+
 def _format_tool_output(content: object) -> str:
     """Flatten a ToolMessage payload (text or content blocks) for display."""
     if content is None:
@@ -503,6 +611,7 @@ def stream_agent(
     final_answer = ""
     tool_names = {}
     tool_started_at = {}
+    project_root = str(_agent_project_root(agent))
     started = time.perf_counter()
 
     for update in agent.stream(
@@ -530,14 +639,17 @@ def stream_agent(
                         tool_names[tool_id] = tool_name
                         tool_started_at[tool_id] = time.perf_counter()
                     if on_event is not None:
-                        on_event(
-                            "tool_start",
-                            {
-                                "tool_id": tool_id,
-                                "tool": tool_name,
-                                "args": _format_tool_args(tool_call.get("args")),
-                            },
-                        )
+                        tool_args = tool_call.get("args")
+                        payload = {
+                            "tool_id": tool_id,
+                            "tool": tool_name,
+                            "args": _format_tool_args(tool_args),
+                        }
+                        command = _tool_command(tool_name, tool_args, project_root)
+                        if command:
+                            payload["command"] = command
+                            payload["cwd"] = project_root
+                        on_event("tool_start", payload)
 
                 if getattr(message, "type", None) == "tool":
                     tool_id = getattr(message, "tool_call_id", None)

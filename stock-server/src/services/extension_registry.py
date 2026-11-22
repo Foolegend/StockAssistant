@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,9 @@ SERVER_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ROOT = SERVER_ROOT / "config"
 PROJECT_ROOT = SERVER_ROOT.parent
 _EXTENSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_COMMAND_ID = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+)
 _PROJECT_RUNTIME_GUIDANCE = """
 ## Project definition compatibility
 - These Agent and Skill files are instructions, not executable editor plugins.
@@ -78,6 +82,39 @@ def _normalized_id(value: str, source: Path) -> str:
     if not _EXTENSION_ID.fullmatch(extension_id) or any(part in (".", "..") for part in extension_id.split("/")):
         raise ValueError(f"Invalid extension id '{extension_id}' in {source}")
     return extension_id
+
+
+def _command_id_from_path(relative: Path, source: Path) -> str:
+    """Build a namespaced command id from a path under ``commands/``.
+
+    ``reports/daily.md`` becomes ``reports:daily`` so subdirectories mirror
+    Claude Code's slash-command namespaces.
+    """
+    parts = list(relative.with_suffix("").parts)
+    if not parts or any(part in (".", "..") for part in parts):
+        raise ValueError(f"Invalid command path '{relative}' in {source}")
+    command_id = ":".join(parts)
+    if not _COMMAND_ID.fullmatch(command_id):
+        raise ValueError(f"Invalid command id '{command_id}' in {source}")
+    return command_id
+
+
+def _as_bool(metadata: dict[str, Any], key: str, source: Path) -> bool:
+    value = metadata.get(key, True)
+    if not isinstance(value, bool):
+        raise ValueError(f"'{key}' in {source} must be a boolean")
+    return value
+
+
+def _as_string_list(metadata: dict[str, Any], key: str, source: Path) -> list[str]:
+    value = metadata.get(key, [])
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item for item in re.split(r"[,\s]+", value.strip()) if item]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"'{key}' in {source} must be a string or an array of strings")
+    return [item for item in value if item]
 
 
 def _validate_entries(entries: list[dict[str, Any]], source: str) -> dict[str, dict[str, Any]]:
@@ -177,6 +214,8 @@ class ExtensionRegistry:
         self.skills: dict[str, dict[str, Any]] = {}
         self.skill_aliases: dict[str, str] = {}
         self.skill_sources: list[str] = []
+        self.commands: dict[str, dict[str, Any]] = {}
+        self.diagnostics: dict[str, Any] = {"slash_conflicts": []}
 
         mcp_servers = []
         for root in self.extension_roots:
@@ -209,6 +248,17 @@ class ExtensionRegistry:
             description = metadata.get("description", "")
             if not isinstance(description, str):
                 raise ValueError(f"Skill description in {skill_file} must be a string")
+            when_to_use = metadata.get("when_to_use")
+            metadata_block = metadata.get("metadata")
+            if when_to_use is None and isinstance(metadata_block, dict):
+                when_to_use = metadata_block.get("trigger")
+            if when_to_use is not None and not isinstance(when_to_use, str):
+                raise ValueError(f"Skill when_to_use in {skill_file} must be a string")
+            allowed_tools = metadata.get("allowed-tools")
+            if allowed_tools is not None and not isinstance(allowed_tools, (str, list)):
+                raise ValueError(
+                    f"Skill allowed-tools in {skill_file} must be a string or an array"
+                )
 
             source_root = skill_file.parent.parent
             relative_skill_path = skill_file.parent.relative_to(skills_root).as_posix()
@@ -216,10 +266,16 @@ class ExtensionRegistry:
                 "id": skill_id,
                 "name": metadata.get("name") or skill_id.replace("-", " ").title(),
                 "description": description,
+                "when_to_use": when_to_use,
+                "allowed_tools": allowed_tools,
+                "version": metadata.get("version"),
                 "path": str(skill_file.parent.resolve()),
                 "file_path": str(skill_file.resolve()),
                 "directory_name": skill_file.parent.name,
                 "source_root": str(source_root.resolve()),
+                "source": "project",
+                "user_invocable": _as_bool(metadata, "user-invocable", skill_file),
+                "enabled": _as_bool(metadata, "enabled", skill_file),
                 "local": False,
             }
             self.skill_aliases[skill_id] = skill_id
@@ -280,12 +336,71 @@ class ExtensionRegistry:
                     "id": agent_id,
                     "name": display_name,
                     "description": description,
+                    "when_to_use": metadata.get("when_to_use") or description,
                     "skill_ids": skill_ids,
                     "mcp_server_ids": server_ids,
                     "file_path": str(agent_file.resolve()),
+                    "source": "project",
                     "source_type": "project",
+                    "enabled": _as_bool(metadata, "enabled", agent_file),
                 }
                 self.agent_source_roots[agent_id] = agent_root
+            self._discover_commands(config_dir / "commands")
+
+    def _discover_commands(self, commands_root: Path) -> None:
+        if not commands_root.is_dir():
+            return
+        for command_file in sorted(commands_root.rglob("*.md")):
+            metadata = _read_markdown_metadata(command_file)
+            command_id = _command_id_from_path(
+                command_file.relative_to(commands_root), command_file
+            )
+            if command_id in self.commands:
+                raise ValueError(
+                    f"Duplicate command id '{command_id}' in {command_file}"
+                )
+            description = metadata.get("description", "")
+            if not isinstance(description, str):
+                raise ValueError(f"Command description in {command_file} must be a string")
+            argument_hint = metadata.get("argument-hint")
+            if argument_hint is not None and not isinstance(argument_hint, str):
+                raise ValueError(
+                    f"Command argument-hint in {command_file} must be a string"
+                )
+            when_to_use = metadata.get("when_to_use")
+            if when_to_use is not None and not isinstance(when_to_use, str):
+                raise ValueError(
+                    f"Command when_to_use in {command_file} must be a string"
+                )
+            agent_id = metadata.get("agent")
+            if agent_id is not None and not isinstance(agent_id, str):
+                raise ValueError(f"Command agent in {command_file} must be a string")
+            allowed_tools = metadata.get("allowed-tools")
+            if allowed_tools is not None and not isinstance(allowed_tools, (str, list)):
+                raise ValueError(
+                    f"Command allowed-tools in {command_file} must be a string or an array"
+                )
+            display_name = metadata.get("name") or f"/{command_id}"
+            if not isinstance(display_name, str) or not display_name.strip():
+                raise ValueError(f"Command name in {command_file} must be a non-empty string")
+            self.commands[command_id] = {
+                "id": command_id,
+                "name": display_name,
+                "description": description,
+                "argument_hint": argument_hint,
+                "arguments": _as_string_list(metadata, "arguments", command_file),
+                "when_to_use": when_to_use,
+                "allowed_tools": allowed_tools,
+                "agent_id": agent_id,
+                "skill_ids": _as_string_list(metadata, "skills", command_file),
+                "mcp_server_ids": _as_string_list(
+                    metadata, "mcp_server_ids", command_file
+                ),
+                "file_path": str(command_file.resolve()),
+                "source": "project",
+                "user_invocable": _as_bool(metadata, "user-invocable", command_file),
+                "enabled": _as_bool(metadata, "enabled", command_file),
+            }
 
     def _resolve_skill_ids(self, owner_id: str, raw_skill_ids: list[str]) -> list[str]:
         resolved = []
@@ -307,6 +422,7 @@ class ExtensionRegistry:
     def component_content(self, component_type: str, component_id: str) -> str:
         components = {
             "agent": self.agents,
+            "command": self.commands,
             "skill": self.skills,
         }
         component = components.get(component_type, {}).get(component_id)
@@ -331,6 +447,35 @@ class ExtensionRegistry:
             for server_id in server_ids:
                 if server_id not in self.mcp_servers:
                     raise ValueError(f"Agent '{agent_id}' references unknown MCP server '{server_id}'")
+
+        slash_owners: dict[str, list[str]] = {}
+        for command_id, command in self.commands.items():
+            agent_id = command.get("agent_id")
+            if agent_id is not None and agent_id not in self.agents:
+                raise ValueError(
+                    f"Command '{command_id}' references unknown agent '{agent_id}'"
+                )
+            command["skill_ids"] = self._resolve_skill_ids(
+                command_id, command.get("skill_ids", [])
+            )
+            for server_id in command.get("mcp_server_ids", []):
+                if server_id not in self.mcp_servers:
+                    raise ValueError(
+                        f"Command '{command_id}' references unknown MCP server '{server_id}'"
+                    )
+            slash_owners.setdefault(command_id, []).append(f"command:{command_id}")
+
+        for skill_id, skill in self.skills.items():
+            slash_owners.setdefault(skill_id, []).append(f"skill:{skill_id}")
+        for alias, skill_id in self.skill_aliases.items():
+            if "/" not in alias:
+                slash_owners.setdefault(alias, []).append(f"skill:{skill_id}")
+        self.diagnostics["slash_conflicts"] = [
+            {"name": name, "owners": sorted(set(owners))}
+            for name, owners in sorted(slash_owners.items())
+            if any(owner.startswith("command:") for owner in owners)
+            and any(owner.startswith("skill:") for owner in owners)
+        ]
 
         for server_id, server in self.mcp_servers.items():
             command = server.get("command")
@@ -396,7 +541,148 @@ class ExtensionRegistry:
                         f"Hook '{hook_id}' references unknown agent '{agent_id}'"
                     )
 
+    def _display_path(self, path: str | None) -> str | None:
+        if not path:
+            return None
+        try:
+            return os.path.relpath(path, self.project_root).replace(os.sep, "/")
+        except ValueError:  # different drive on Windows
+            return Path(path).as_posix()
+
+    def _skill_aliases_for(self, skill_id: str) -> list[str]:
+        return sorted(
+            alias for alias, target in self.skill_aliases.items() if target == skill_id
+        )
+
+    def _mcp_status(self) -> dict[str, dict[str, Any]]:
+        try:
+            from src.mcp.client import mcp_status_snapshot
+
+            return mcp_status_snapshot()
+        except Exception:  # pragma: no cover - status must never break the catalog
+            return {}
+
     def catalog(self) -> dict[str, Any]:
+        statuses = self._mcp_status()
+        mcp_entries = []
+        for server_id, server in self.mcp_servers.items():
+            transport = (
+                "streamable_http"
+                if server.get("type") == "http"
+                else "stdio"
+            )
+            status = statuses.get(server_id) or statuses.get(server.get("name", "")) or {}
+            mcp_entries.append(
+                {
+                    "id": server_id,
+                    "name": server["name"],
+                    "description": server.get("description", ""),
+                    "transport": transport,
+                    "status": status.get("status", "idle"),
+                    "tool_count": status.get("tool_count", 0),
+                    "tools": status.get("tools", []),
+                    "error": status.get("error"),
+                    "updated_at": status.get("updated_at"),
+                    "source": "project",
+                    "file_path": self._display_path(
+                        str(
+                            self.stock_extension_root
+                            / "mcp-configs"
+                            / "mcp-servers.json"
+                        )
+                    ),
+                }
+            )
+        return {
+            "version": 2,
+            "agents": [
+                {
+                    "id": agent_id,
+                    "name": agent["name"],
+                    "description": agent.get("description", ""),
+                    "when_to_use": agent.get("when_to_use"),
+                    "skills": [
+                        {"id": skill_id, "name": self.skills[skill_id]["name"]}
+                        for skill_id in agent.get("skill_ids", [])
+                    ],
+                    "mcp_servers": [
+                        {
+                            "id": server_id,
+                            "name": self.mcp_servers[server_id]["name"],
+                            "description": self.mcp_servers[server_id].get("description", ""),
+                        }
+                        for server_id in agent.get("mcp_server_ids", [])
+                    ],
+                    "source": agent.get("source", "project"),
+                    "file_path": self._display_path(agent.get("file_path")),
+                    "enabled": agent.get("enabled", True),
+                }
+                for agent_id, agent in self.agents.items()
+            ],
+            "skills": [
+                {
+                    "id": skill_id,
+                    "name": skill["name"],
+                    "description": skill.get("description", ""),
+                    "when_to_use": skill.get("when_to_use"),
+                    "allowed_tools": skill.get("allowed_tools"),
+                    "version": skill.get("version"),
+                    "aliases": self._skill_aliases_for(skill_id),
+                    "source": skill.get("source", "project"),
+                    "file_path": self._display_path(skill.get("file_path")),
+                    "user_invocable": skill.get("user_invocable", True),
+                    "enabled": skill.get("enabled", True),
+                }
+                for skill_id, skill in self.skills.items()
+            ],
+            "commands": [
+                {
+                    "id": command_id,
+                    "name": command["name"],
+                    "description": command.get("description", ""),
+                    "argument_hint": command.get("argument_hint"),
+                    "arguments": list(command.get("arguments", [])),
+                    "when_to_use": command.get("when_to_use"),
+                    "allowed_tools": command.get("allowed_tools"),
+                    "agent_id": command.get("agent_id"),
+                    "skills": [
+                        {"id": skill_id, "name": self.skills[skill_id]["name"]}
+                        for skill_id in command.get("skill_ids", [])
+                    ],
+                    "mcp_servers": [
+                        {"id": server_id, "name": self.mcp_servers[server_id]["name"]}
+                        for server_id in command.get("mcp_server_ids", [])
+                    ],
+                    "source": command.get("source", "project"),
+                    "file_path": self._display_path(command.get("file_path")),
+                    "user_invocable": command.get("user_invocable", True),
+                    "enabled": command.get("enabled", True),
+                }
+                for command_id, command in self.commands.items()
+            ],
+            "mcp_servers": mcp_entries,
+            "hooks": [
+                {
+                    "id": hook_id,
+                    "name": hook["name"],
+                    "event": hook["event"],
+                    "enabled": hook.get("enabled", True),
+                    "source": "project",
+                }
+                for hook_id, hook in self.hooks.items()
+            ],
+            "counts": {
+                "agents": len(self.agents),
+                "skills": len(self.skills),
+                "commands": len(self.commands),
+                "mcp_servers": len(self.mcp_servers),
+                "hooks": len(self.hooks),
+            },
+            "diagnostics": self.diagnostics,
+        }
+
+    def routing_catalog(self) -> dict[str, Any]:
+        """Lean component list for the LLM router (no commands, paths or status)."""
         return {
             "agents": [
                 {
@@ -417,14 +703,17 @@ class ExtensionRegistry:
                     ],
                 }
                 for agent_id, agent in self.agents.items()
+                if agent.get("enabled", True)
             ],
             "skills": [
                 {
                     "id": skill_id,
                     "name": skill["name"],
                     "description": skill.get("description", ""),
+                    "when_to_use": skill.get("when_to_use"),
                 }
                 for skill_id, skill in self.skills.items()
+                if skill.get("enabled", True)
             ],
             "mcp_servers": [
                 {
@@ -434,16 +723,28 @@ class ExtensionRegistry:
                 }
                 for server_id, server in self.mcp_servers.items()
             ],
-            "hooks": [
-                {
-                    "id": hook_id,
-                    "name": hook["name"],
-                    "event": hook["event"],
-                    "enabled": hook.get("enabled", True),
-                }
-                for hook_id, hook in self.hooks.items()
-            ],
         }
+
+    def command_input(self, command: dict[str, Any], arguments: str = "") -> str:
+        """Expand a slash command into the text sent to the agent."""
+        prompt = self.component_content("command", command["id"])
+        arguments = arguments.strip()
+        if not prompt:
+            return arguments
+        positional = [part for part in arguments.split() if part]
+        placeholders = [f"${index + 1}" for index in range(9)]
+        uses_arguments = "$ARGUMENTS" in prompt or any(
+            placeholder in prompt for placeholder in placeholders
+        )
+        expanded = prompt
+        # Replace positional placeholders first so values introduced by
+        # $ARGUMENTS are never re-scanned.
+        for index, value in enumerate(positional[:9]):
+            expanded = expanded.replace(f"${index + 1}", value)
+        expanded = expanded.replace("$ARGUMENTS", arguments)
+        if arguments and not uses_arguments:
+            expanded = f"{expanded}\n\nUser request:\n{arguments}"
+        return f"## Command: {command['name']}\n\n{expanded}".strip()
 
     def _subagents(
         self,

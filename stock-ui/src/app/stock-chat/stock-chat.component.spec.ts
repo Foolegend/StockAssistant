@@ -100,6 +100,113 @@ describe('StockChatComponent', () => {
     expect(localStorage.getItem('stock-assistant-conversations-v1')).toContain('分析 TSLA');
   });
 
+  it('offers a copy button for the user question', async () => {
+    const stream = 'event: complete\ndata: {"answer":"完成","sources":[]}\n\n';
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
+    const writeText = jasmine.createSpy('writeText').and.resolveTo();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    component.userQuestion = '帮我分析中兴通讯的财报';
+    await component.sendChat();
+    fixture.detectChanges();
+
+    const copyButton: HTMLButtonElement | null = fixture.nativeElement.querySelector(
+      '.user-row .copy-button',
+    );
+    expect(copyButton).toBeTruthy();
+
+    copyButton?.click();
+    await fixture.whenStable();
+    expect(writeText).toHaveBeenCalledWith('帮我分析中兴通讯的财报');
+  });
+
+  it('keeps long tool steps from squeezing the conversation column', () => {
+    // The Karma viewport is narrower than the desktop breakpoint, so force the
+    // desktop layout to exercise the side-by-side flex layout.
+    const desktopLayout = document.createElement('style');
+    desktopLayout.textContent = `
+      .workspace { display: flex !important; }
+      .sidebar { display: block !important; }
+      .content-layout { display: flex !important; }
+    `;
+    document.head.appendChild(desktopLayout);
+
+    try {
+      const longCommand = `python -c "${'x'.repeat(400)}"`;
+      component.currentConversation.messages = [
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: '',
+          activities: [
+            {
+              id: 'tool-1',
+              tool: 'execute',
+              status: 'complete',
+              args: JSON.stringify({ command: longCommand }),
+            },
+          ],
+        },
+      ];
+      fixture.detectChanges();
+
+      const conversation = fixture.nativeElement.querySelector(
+        '.conversation-panel',
+      ) as HTMLElement;
+      const evidence = fixture.nativeElement.querySelector('.evidence-panel') as HTMLElement;
+      expect(conversation.getBoundingClientRect().width).toBeGreaterThan(150);
+      expect(evidence.getBoundingClientRect().width).toBeLessThan(320);
+    } finally {
+      desktopLayout.remove();
+    }
+  });
+
+  it('shows the local command and working directory for a tool step', async () => {
+    const stream = [
+      {
+        event: 'tool_start',
+        data: {
+          tool_id: 'tool-2',
+          tool: 'execute',
+          args: '{"command":"python probe.py"}',
+          command: 'python probe.py',
+          cwd: 'D:\\repo',
+        },
+      },
+      {
+        event: 'tool_end',
+        data: { tool_id: 'tool-2', tool: 'execute', output: 'ok', duration_ms: 5 },
+      },
+      { event: 'complete', data: { answer: '完成', sources: [] } },
+    ]
+      .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      .join('');
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
+
+    component.userQuestion = '跑一下';
+    await component.sendChat();
+    fixture.detectChanges();
+
+    const inputBlock: HTMLElement | null =
+      fixture.nativeElement.querySelector('.io-block');
+    expect(inputBlock).toBeTruthy();
+    expect(inputBlock?.querySelector('.io-label')?.textContent).toContain('IN');
+    expect(inputBlock?.querySelector('pre')?.textContent).toContain('python probe.py');
+    expect(inputBlock?.querySelector('.io-cwd')?.textContent).toContain(
+      '工作目录：D:\\repo',
+    );
+    expect(fixture.nativeElement.querySelector('.activity-desc')?.textContent).toContain(
+      'python probe.py',
+    );
+
+    const outputBlock = fixture.nativeElement.querySelectorAll('.io-block')[1] as HTMLElement;
+    expect(outputBlock?.querySelector('.io-label')?.textContent).toContain('OUT');
+    expect(outputBlock?.querySelector('pre')?.textContent).toContain('ok');
+  });
+
   it('shows backend errors instead of a success-shaped answer', async () => {
     (window.fetch as jasmine.Spy).and.resolveTo(
       new Response(JSON.stringify({ detail: 'Agent 服务暂不可用' }), {

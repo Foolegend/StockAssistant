@@ -1,7 +1,20 @@
-import { ChangeDetectorRef, Component, ChangeDetectionStrategy } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
+  Component,
+  ElementRef,
+  ViewChild,
+} from '@angular/core';
 
 import { FormsModule } from '@angular/forms';
 
+import {
+  CapabilityCatalog,
+  CapabilityRef,
+  SlashSuggestion,
+  UsageInfo,
+} from '../extensions/capabilities.types';
+import { CapabilitiesDialogComponent } from '../extensions/capabilities-dialog.component';
 import { MarkdownPipe } from '../shared/markdown.pipe';
 
 interface SourceLink {
@@ -14,6 +27,10 @@ interface AgentActivity {
   tool: string;
   status: 'running' | 'complete';
   args?: string;
+  /** Host command the server says reproduces this step locally. */
+  command?: string;
+  /** Working directory for `command`. */
+  cwd?: string;
   output?: string;
   error?: boolean;
   durationMs?: number;
@@ -30,6 +47,8 @@ interface ChatMessage {
   sources?: SourceLink[];
   agentId?: string | null;
   model?: string | null;
+  /** Agent / command / skills / MCP used by this answer. */
+  usage?: UsageInfo;
 }
 
 interface ChatConversation {
@@ -61,9 +80,58 @@ interface PreferenceCategory {
   label: string;
 }
 
+/** Human-readable action names for the tools the agent may call. */
+const TOOL_LABELS: Record<string, string> = {
+  ls: '浏览目录',
+  list_directory: '浏览目录',
+  glob: '查找文件',
+  grep: '检索内容',
+  read_file: '读取文件',
+  read_text_file: '读取文件',
+  write_file: '写入文件',
+  edit_file: '修改文件',
+  delete: '删除文件',
+  execute: '执行命令',
+  run_command: '执行命令',
+  shell: '执行命令',
+  web_search: '网络搜索',
+  web_fetch: '抓取网页',
+  write_todos: '更新任务清单',
+  task: '派发子任务',
+  start_async_task: '启动后台任务',
+  check_async_task: '查看后台任务',
+  update_async_task: '更新后台任务',
+  cancel_async_task: '取消后台任务',
+  list_async_tasks: '列出后台任务',
+  compact_conversation: '压缩对话上下文',
+  rubric_grader: '评估回答质量',
+  normalize_symbol: '标准化股票代码',
+  technical_indicators: '计算技术指标',
+  position_plan: '测算仓位与止损',
+  valuation_snapshot: '计算估值比率',
+};
+
+/** Argument keys that best describe what a tool call is acting on. */
+const TOOL_TARGET_KEYS = [
+  'path',
+  'file_path',
+  'filename',
+  'directory',
+  'dir',
+  'command',
+  'cmd',
+  'script',
+  'code',
+  'symbol',
+  'ticker',
+  'query',
+  'pattern',
+  'url',
+];
+
 @Component({
   selector: 'app-stock-chat',
-  imports: [FormsModule, MarkdownPipe],
+  imports: [FormsModule, MarkdownPipe, CapabilitiesDialogComponent],
   changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './stock-chat.component.html',
 })
@@ -106,6 +174,20 @@ export class StockChatComponent {
   editingPreferenceId: number | null = null;
   editingContent = '';
 
+  catalog: CapabilityCatalog | null = null;
+  catalogLoading = false;
+  catalogError: string | null = null;
+  capabilitiesOpen = false;
+
+  slashMenuOpen = false;
+  slashMatches: SlashSuggestion[] = [];
+  slashActiveIndex = 0;
+  slashQuery = '';
+
+  @ViewChild('composerInput')
+  private composerInput?: ElementRef<HTMLTextAreaElement>;
+
+  private catalogRequest?: Promise<void>;
   private abortController?: AbortController;
   private activeRunId?: string;
   private readonly storageKey = 'stock-assistant-conversations-v1';
@@ -139,6 +221,24 @@ export class StockChatComponent {
       }
     }
     return [];
+  }
+
+  get currentUsage(): UsageInfo | null {
+    const messages = this.currentConversation.messages;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'assistant') {
+        return messages[index].usage ?? null;
+      }
+    }
+    return null;
+  }
+
+  get capabilityCount(): number {
+    if (!this.catalog) {
+      return 0;
+    }
+    const counts = this.catalog.counts;
+    return counts.commands + counts.skills + counts.agents + counts.mcp_servers;
   }
 
   newChat(): void {
@@ -483,14 +583,284 @@ export class StockChatComponent {
     this.sendChat();
   }
 
+  openCapabilities(): void {
+    this.capabilitiesOpen = true;
+    this.cdr.detectChanges();
+    void this.ensureCatalog();
+  }
+
+  closeCapabilities(): void {
+    this.capabilitiesOpen = false;
+    this.cdr.detectChanges();
+  }
+
+  refreshCapabilities(): void {
+    void this.ensureCatalog(true);
+  }
+
+  insertSlash(text: string): void {
+    this.userQuestion = text;
+    this.capabilitiesOpen = false;
+    this.closeSlashMenu();
+    this.focusComposer();
+  }
+
+  onComposerInput(event: Event): void {
+    const value = (event.target as HTMLTextAreaElement).value;
+    if (this.isLoading) {
+      this.closeSlashMenu();
+      return;
+    }
+    const match = /^\/(\S*)$/.exec(value);
+    if (!match) {
+      this.closeSlashMenu();
+      return;
+    }
+    this.slashQuery = match[1];
+    this.slashMenuOpen = true;
+    this.slashActiveIndex = 0;
+    if (this.catalog) {
+      this.refreshSlashMatches();
+      return;
+    }
+    void this.ensureCatalog().then(() => {
+      this.refreshSlashMatches();
+      this.cdr.detectChanges();
+    });
+  }
+
+  selectSlashSuggestion(suggestion: SlashSuggestion): void {
+    this.applySlashSuggestion(suggestion);
+  }
+
   handleKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
+    if (this.slashMenuOpen) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.moveSlashSelection(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.moveSlashSelection(-1);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeSlashMenu();
+        return;
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && this.slashMatches.length) {
+        event.preventDefault();
+        this.applySlashSuggestion(
+          this.slashMatches[Math.min(this.slashActiveIndex, this.slashMatches.length - 1)],
+        );
+        return;
+      }
+      if (event.key === 'Enter' && this.catalogLoading) {
+        event.preventDefault();
+        return;
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       this.sendChat();
     }
   }
 
+  private ensureCatalog(force = false): Promise<void> {
+    if (!force && this.catalog) {
+      return Promise.resolve();
+    }
+    if (!force && this.catalogRequest) {
+      return this.catalogRequest;
+    }
+    this.catalogLoading = true;
+    this.catalogError = null;
+    this.cdr.detectChanges();
+    const request = (async () => {
+      try {
+        const response = await fetch(`${this.apiBaseUrl}/agent/catalog`);
+        if (!response.ok) {
+          throw new Error(await this.readError(response));
+        }
+        const payload = (await response.json()) as { data?: CapabilityCatalog };
+        if (!payload.data || !Array.isArray(payload.data.commands)) {
+          throw new Error('能力目录数据无效');
+        }
+        this.catalog = payload.data;
+      } catch (error: unknown) {
+        this.catalogError =
+          error instanceof Error ? error.message : '能力目录加载失败';
+      } finally {
+        this.catalogLoading = false;
+        this.catalogRequest = undefined;
+        this.cdr.detectChanges();
+      }
+    })();
+    this.catalogRequest = request;
+    return request;
+  }
+
+  private closeSlashMenu(): void {
+    this.slashMenuOpen = false;
+    this.slashMatches = [];
+    this.slashActiveIndex = 0;
+  }
+
+  private moveSlashSelection(delta: number): void {
+    if (!this.slashMatches.length) {
+      return;
+    }
+    const next = this.slashActiveIndex + delta;
+    this.slashActiveIndex =
+      (next + this.slashMatches.length) % this.slashMatches.length;
+  }
+
+  private applySlashSuggestion(suggestion: SlashSuggestion): void {
+    this.userQuestion = `/${suggestion.slashName} `;
+    this.closeSlashMenu();
+    this.focusComposer();
+  }
+
+  private refreshSlashMatches(): void {
+    const catalog = this.catalog;
+    if (!catalog) {
+      this.slashMatches = [];
+      return;
+    }
+    const query = this.slashQuery.trim().toLowerCase();
+    const suggestions: SlashSuggestion[] = [];
+    for (const command of catalog.commands) {
+      if (!command.enabled || !command.user_invocable) {
+        continue;
+      }
+      suggestions.push({
+        kind: 'command',
+        id: command.id,
+        slashName: command.id,
+        name: command.name,
+        description: command.description,
+        argumentHint: command.argument_hint,
+        score: this.slashScore(query, command.id, command.name, command.description),
+      });
+    }
+    for (const skill of catalog.skills) {
+      if (!skill.enabled || !skill.user_invocable) {
+        continue;
+      }
+      const aliases = skill.aliases.filter((alias) =>
+        /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(alias),
+      );
+      suggestions.push({
+        kind: 'skill',
+        id: skill.id,
+        slashName: skill.id,
+        name: skill.name,
+        description: skill.description,
+        argumentHint: null,
+        score: this.slashScore(
+          query,
+          skill.id,
+          skill.name,
+          skill.description,
+          aliases,
+        ),
+      });
+    }
+    this.slashMatches = suggestions
+      .filter((item) => item.score < 100)
+      .sort(
+        (left, right) =>
+          left.score - right.score ||
+          (left.kind === right.kind ? 0 : left.kind === 'command' ? -1 : 1) ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(0, 8);
+    if (this.slashActiveIndex >= this.slashMatches.length) {
+      this.slashActiveIndex = 0;
+    }
+  }
+
+  private slashScore(
+    query: string,
+    id: string,
+    name: string,
+    description: string,
+    aliases: string[] = [],
+  ): number {
+    if (!query) {
+      return 10;
+    }
+    const values = [id, name, ...aliases].map((value) => value.toLowerCase());
+    if (values.includes(query)) {
+      return 0;
+    }
+    if (values.some((value) => value.startsWith(query))) {
+      return 1;
+    }
+    if (values.some((value) => value.includes(query))) {
+      return 2;
+    }
+    if (description.toLowerCase().includes(query)) {
+      return 3;
+    }
+    return 100;
+  }
+
+  private focusComposer(): void {
+    window.setTimeout(() => this.composerInput?.nativeElement.focus(), 0);
+  }
+
+  private applyUsage(message: ChatMessage, data: Record<string, unknown>): void {
+    const usage: UsageInfo = message.usage ?? { skills: [], mcpServers: [] };
+    const agent = data['agent'];
+    if (this.isCapabilityRef(agent)) {
+      usage.agentId = agent.id;
+      usage.agentName = agent.name;
+    } else if (typeof data['agent_id'] === 'string') {
+      usage.agentId = data['agent_id'];
+    }
+    if ('command' in data) {
+      usage.command = this.isCapabilityRef(data['command'])
+        ? data['command']
+        : null;
+    }
+    const skills = data['skills'];
+    if (Array.isArray(skills)) {
+      usage.skills = skills.filter((item): item is CapabilityRef =>
+        this.isCapabilityRef(item),
+      );
+    }
+    const mcpServers = data['mcp_servers'];
+    if (Array.isArray(mcpServers)) {
+      usage.mcpServers = mcpServers.filter((item): item is CapabilityRef =>
+        this.isCapabilityRef(item),
+      );
+    }
+    if (
+      usage.agentId ||
+      usage.command ||
+      usage.skills.length ||
+      usage.mcpServers.length
+    ) {
+      message.usage = usage;
+    }
+  }
+
+  private isCapabilityRef(value: unknown): value is CapabilityRef {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+    const ref = value as Partial<CapabilityRef>;
+    return typeof ref.id === 'string' && typeof ref.name === 'string';
+  }
+
   async sendChat(): Promise<void> {
+    this.closeSlashMenu();
     const question = this.userQuestion.trim();
     if (!question || this.isLoading) {
       return;
@@ -596,7 +966,7 @@ export class StockChatComponent {
     }
   }
 
-  async copyAnswer(message: ChatMessage): Promise<void> {
+  async copyMessage(message: ChatMessage): Promise<void> {
     if (!message.content) {
       return;
     }
@@ -616,6 +986,43 @@ export class StockChatComponent {
 
   trackById(_index: number, item: { id: string }): string {
     return item.id;
+  }
+
+  /** Display name for a tool step, e.g. "ls" → "浏览目录". */
+  activityLabel(activity: AgentActivity): string {
+    return TOOL_LABELS[activity.tool] ?? activity.tool;
+  }
+
+  /** Hover title: raw tool name plus the original invocation arguments. */
+  activityTitle(activity: AgentActivity): string {
+    return activity.args ? `${activity.tool}\n${activity.args}` : activity.tool;
+  }
+
+  /** Short description of what the tool acted on, parsed from its arguments. */
+  activityTarget(activity: AgentActivity): string {
+    if (!activity.args) {
+      return '';
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(activity.args);
+    } catch {
+      return '';
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return '';
+    }
+    const args = parsed as Record<string, unknown>;
+    for (const key of TOOL_TARGET_KEYS) {
+      const value = args[key];
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim().split('\n')[0].trim();
+      }
+      if (typeof value === 'number') {
+        return String(value);
+      }
+    }
+    return '';
   }
 
   private async readEventStream(
@@ -674,18 +1081,25 @@ export class StockChatComponent {
         assistant.status = message;
         this.agentStatus = message;
       }
+      this.applyUsage(assistant, data);
     } else if (event.event === 'tool_start') {
       const toolId = typeof data['tool_id'] === 'string' ? data['tool_id'] : this.createId();
       const tool = typeof data['tool'] === 'string' ? data['tool'] : '分析工具';
       assistant.activities ??= [];
       const args = typeof data['args'] === 'string' ? data['args'] : '';
-      assistant.activities.push({
+      const command = typeof data['command'] === 'string' ? data['command'] : '';
+      const cwd = typeof data['cwd'] === 'string' ? data['cwd'] : '';
+      const activity: AgentActivity = {
         id: toolId,
         tool,
         status: 'running',
         ...(args ? { args } : {}),
-      });
-      this.agentStatus = `正在使用${tool}`;
+        ...(command ? { command, ...(cwd ? { cwd } : {}) } : {}),
+      };
+      assistant.activities.push(activity);
+      const label = this.activityLabel(activity);
+      const target = this.activityTarget(activity);
+      this.agentStatus = target ? `正在${label}：${target}` : `正在${label}`;
     } else if (event.event === 'tool_end') {
       const toolId = data['tool_id'];
       const activity = assistant.activities?.find((item) => item.id === toolId);
@@ -718,6 +1132,7 @@ export class StockChatComponent {
         : [];
       assistant.agentId = typeof data['agent_id'] === 'string' ? data['agent_id'] : null;
       assistant.model = typeof data['model'] === 'string' ? data['model'] : null;
+      this.applyUsage(assistant, data);
       assistant.status = '分析完成';
     } else if (event.event === 'cancelled') {
       assistant.cancelled = true;
@@ -979,6 +1394,7 @@ export class StockChatComponent {
       role?: unknown;
       content?: unknown;
       sources?: unknown;
+      metadata?: unknown;
     };
     if (typeof record.content !== 'string') {
       return null;
@@ -992,12 +1408,55 @@ export class StockChatComponent {
             typeof (source as SourceLink).url === 'string',
         )
       : [];
-    return {
+    const message: ChatMessage = {
       id: this.createId(),
       role: record.role === 'user' ? 'user' : 'assistant',
       content: record.content,
       sources,
     };
+    const usage = this.parseStoredUsage(record.metadata);
+    if (usage) {
+      message.usage = usage;
+    }
+    return message;
+  }
+
+  private parseStoredUsage(metadata: unknown): UsageInfo | undefined {
+    if (typeof metadata !== 'object' || metadata === null) {
+      return undefined;
+    }
+    const usage = (metadata as { usage?: unknown }).usage;
+    if (typeof usage !== 'object' || usage === null) {
+      return undefined;
+    }
+    const record = usage as Record<string, unknown>;
+    const result: UsageInfo = { skills: [], mcpServers: [] };
+    if (typeof record['agent_id'] === 'string') {
+      result.agentId = record['agent_id'];
+    }
+    if (this.isCapabilityRef(record['agent'])) {
+      result.agentId = record['agent'].id;
+      result.agentName = record['agent'].name;
+    }
+    if (this.isCapabilityRef(record['command'])) {
+      result.command = record['command'];
+    }
+    if (Array.isArray(record['skills'])) {
+      result.skills = record['skills'].filter((item): item is CapabilityRef =>
+        this.isCapabilityRef(item),
+      );
+    }
+    if (Array.isArray(record['mcp_servers'])) {
+      result.mcpServers = record['mcp_servers'].filter(
+        (item): item is CapabilityRef => this.isCapabilityRef(item),
+      );
+    }
+    return result.agentId ||
+      result.command ||
+      result.skills.length ||
+      result.mcpServers.length
+      ? result
+      : undefined;
   }
 
   private persistConversations(): void {

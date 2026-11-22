@@ -40,7 +40,8 @@ def _validate_selection(selection: ComponentSelection, registry: Any) -> Compone
 
 
 def select_components(question: str, registry: Any, model: Any) -> ComponentSelection:
-    catalog = registry.catalog()
+    routing_catalog = getattr(registry, "routing_catalog", registry.catalog)
+    catalog = routing_catalog()
     options = {
         "agents": catalog["agents"],
         "skills": catalog["skills"],

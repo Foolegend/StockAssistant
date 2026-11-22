@@ -62,6 +62,12 @@ class ExtensionRegistryTests(unittest.TestCase):
     def write_config(self, name, content):
         (self.config_root / name).write_text(json.dumps(content), encoding="utf-8")
 
+    def write_command(self, relative: str, content: str) -> Path:
+        path = self.root / "stock-server" / ".stock" / "commands" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
     def test_catalog_uses_display_names_and_registered_ids(self):
         registry = ExtensionRegistry(self.config_root, project_root=self.root)
 
@@ -71,8 +77,117 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(catalog["agents"][0]["skills"][0]["id"], "sample-skill")
         self.assertEqual(catalog["mcp_servers"][0]["id"], "local-tools")
         self.assertEqual(catalog["skills"][0]["id"], "sample-skill")
-        self.assertNotIn("commands", catalog)
+        self.assertEqual(catalog["version"], 2)
+        self.assertEqual(catalog["commands"], [])
+        self.assertEqual(catalog["counts"]["commands"], 0)
         self.assertNotIn("default_agent_id", catalog)
+        routing = registry.routing_catalog()
+        self.assertNotIn("commands", routing)
+        self.assertNotIn("file_path", routing["skills"][0])
+
+    def test_command_discovery_uses_namespaced_ids_and_frontmatter(self):
+        self.write_command(
+            "reports/daily.md",
+            "---\n"
+            "name: Daily report\n"
+            "description: Build a daily report.\n"
+            "argument-hint: <symbol>\n"
+            "arguments: [symbol]\n"
+            "when_to_use: When a daily digest is requested.\n"
+            "allowed-tools: Read Write\n"
+            "agent: assistant\n"
+            "skills: [sample-skill]\n"
+            "mcp_server_ids: [local-tools]\n"
+            "---\n"
+            "Report on $ARGUMENTS.\n",
+        )
+
+        self.write_command(
+            "reports/weekly/deep.md",
+            "---\ndescription: Deep report.\n---\nTask.\n",
+        )
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        self.assertIn("reports:weekly:deep", registry.commands)
+        command = registry.commands["reports:daily"]
+        self.assertEqual(command["name"], "Daily report")
+        self.assertEqual(command["argument_hint"], "<symbol>")
+        self.assertEqual(command["arguments"], ["symbol"])
+        self.assertEqual(command["when_to_use"], "When a daily digest is requested.")
+        self.assertEqual(command["allowed_tools"], "Read Write")
+        self.assertEqual(command["agent_id"], "assistant")
+        self.assertEqual(command["skill_ids"], ["sample-skill"])
+        self.assertEqual(command["mcp_server_ids"], ["local-tools"])
+        self.assertTrue(command["enabled"])
+        self.assertTrue(command["user_invocable"])
+
+        catalog = registry.catalog()
+        entry = catalog["commands"][0]
+        self.assertEqual(entry["id"], "reports:daily")
+        self.assertEqual(entry["file_path"], "stock-server/.stock/commands/reports/daily.md")
+        self.assertEqual(catalog["counts"]["commands"], 2)
+
+    def test_command_input_substitutes_arguments_once(self):
+        self.write_command(
+            "run.md",
+            "---\ndescription: Run.\n---\n"
+            "Do $1 then $2 for $ARGUMENTS.\n",
+        )
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        expanded = registry.command_input(
+            registry.commands["run"], "TSLA daily"
+        )
+
+        self.assertIn("## Command: /run", expanded)
+        self.assertIn("Do TSLA then daily for TSLA daily.", expanded)
+
+    def test_command_input_appends_request_without_placeholder(self):
+        self.write_command("plain.md", "---\ndescription: Plain.\n---\nDo the task.\n")
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        expanded = registry.command_input(registry.commands["plain"], "分析 TSLA")
+
+        self.assertIn("Do the task.", expanded)
+        self.assertIn("User request:\n分析 TSLA", expanded)
+
+    def test_command_rejects_unknown_references(self):
+        self.write_command(
+            "broken.md",
+            "---\ndescription: Broken.\nskills: [missing-skill]\n---\nTask.\n",
+        )
+        with self.assertRaisesRegex(ValueError, "unknown skill"):
+            ExtensionRegistry(self.config_root, project_root=self.root)
+
+    def test_slash_conflict_is_reported_in_diagnostics(self):
+        self.write_command(
+            "sample-skill.md",
+            "---\ndescription: Shadows the skill.\n---\nTask.\n",
+        )
+
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        self.assertIn("sample-skill", registry.commands)
+        self.assertEqual(
+            registry.diagnostics["slash_conflicts"],
+            [
+                {
+                    "name": "sample-skill",
+                    "owners": ["command:sample-skill", "skill:sample-skill"],
+                }
+            ],
+        )
+
+    def test_disabled_and_non_invocable_commands_are_cataloged(self):
+        self.write_command(
+            "hidden.md",
+            "---\ndescription: Hidden.\nenabled: false\nuser-invocable: false\n---\nTask.\n",
+        )
+        registry = ExtensionRegistry(self.config_root, project_root=self.root)
+
+        entry = registry.catalog()["commands"][0]
+        self.assertFalse(entry["enabled"])
+        self.assertFalse(entry["user_invocable"])
 
     def test_component_bodies_are_read_only_when_requested(self):
         with patch(
@@ -275,7 +390,15 @@ class ExtensionRegistryTests(unittest.TestCase):
         self.assertEqual(registry.hooks[hook_id]["event"], "PreToolUse")
         self.assertEqual(
             registry.catalog()["hooks"],
-            [{"id": hook_id, "name": "Audit chat", "event": "PreToolUse", "enabled": True}],
+            [
+                {
+                    "id": hook_id,
+                    "name": "Audit chat",
+                    "event": "PreToolUse",
+                    "enabled": True,
+                    "source": "project",
+                }
+            ],
         )
 
     def test_native_hook_rejects_unsupported_matcher_expression(self):
