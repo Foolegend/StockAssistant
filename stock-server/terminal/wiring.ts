@@ -14,6 +14,13 @@ export interface TerminalLaunch {
   env: Record<string, string | undefined>;
 }
 
+export interface TerminalLaunchOptions {
+  /** Conversation/session id passed to the CLI. */
+  sessionId?: string;
+  /** Resume an existing CLI session instead of creating a new one. */
+  resume?: boolean;
+}
+
 export function loadDotEnv(file: string): Record<string, string> {
   const result: Record<string, string> = {};
   if (!existsSync(file)) return result;
@@ -41,6 +48,7 @@ export function buildTerminalLaunch(
   stockRoot: string,
   catalog: CapabilityCatalog,
   agentBodies: Map<string, string>,
+  options: TerminalLaunchOptions = {},
 ): TerminalLaunch {
   const dotenv = loadDotEnv(join(stockRoot, '.env'));
   const env: Record<string, string | undefined> = {
@@ -68,6 +76,14 @@ export function buildTerminalLaunch(
 
   const settings = buildSettings(repoRoot, stockRoot);
   if (settings) args.push('--settings', settings);
+
+  if (options.sessionId) {
+    if (options.resume) {
+      args.push('--resume', options.sessionId);
+    } else {
+      args.push('--session-id', options.sessionId);
+    }
+  }
 
   return { args, env };
 }

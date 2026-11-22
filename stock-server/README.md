@@ -51,7 +51,10 @@ server-side PTY sessions:
 - `GET/POST/DELETE /sessions` — list, create, delete sessions
 - `GET /sessions/{id}/output` and `GET /sessions/export` — export output
 - `GET /health` — health check
-- Each session keeps a bounded output buffer that is replayed on re-attach
+- Sessions (metadata + bounded output buffer) are persisted in SQLite
+  (`data/terminal-sessions.db`); on re-attach the CLI resumes via `--resume`
+  when its saved session file exists
+- Set `INVEST_TERMINAL_DB` to override the SQLite path
 - `.env`, `.stock` MCP config, hooks and the agent/skill/command system prompt
   are injected by [terminal/wiring.ts](terminal/wiring.ts)
 

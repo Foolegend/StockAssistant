@@ -1,8 +1,11 @@
 /**
  * PTY + WebSocket server that exposes StockAssistant CLI sessions.
  *
- * A session owns one CLI process and survives WebSocket disconnects, so the
- * sidebar can list sessions and re-attach to the same PTY later.
+ * Sessions are persisted in SQLite (metadata + bounded terminal output), so the
+ * sidebar keeps them across backend restarts. The live PTY cannot survive a
+ * restart: on re-attach the server starts a new CLI, resuming the CLI's own
+ * session file (`--resume`) when it exists, otherwise creating it with the same
+ * id (`--session-id`).
  *
  * HTTP:
  *   GET    /health
@@ -16,12 +19,15 @@
  * WebSocket:
  *   /terminal/ws?session=<id>&cols=<n>&rows=<n>
  *   client -> server: {"type":"input","data":"..."} / {"type":"resize","cols":N,"rows":N}
- *   server -> client: raw ANSI output (session buffer is replayed on attach)
+ *   server -> client: session buffer replay + raw ANSI output
  */
 
+import { existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { loadStockExtensions } from '../lib/catalog';
+import { SessionStore } from './store';
 import { buildTerminalLaunch } from './wiring';
 
 const serverDir = import.meta.dir;
@@ -35,6 +41,10 @@ const host =
 const port = Number(
   process.env.INVEST_TERMINAL_PORT ?? process.env.INVEST_SERVER_PORT ?? 8015,
 );
+const dbPath =
+  process.env.INVEST_TERMINAL_DB ??
+  process.env.STOCK_CHECKPOINT_DB ??
+  join(stockRoot, 'data', 'terminal-sessions.db');
 
 interface PseudoTerminal {
   write(data: string): void;
@@ -60,12 +70,14 @@ interface Session {
   updatedAt: string;
   cols: number;
   rows: number;
-  term: PseudoTerminal;
-  proc: { kill(): void };
+  term: PseudoTerminal | null;
+  proc: { kill(): void } | null;
   decoder: TextDecoder;
   buffer: string;
   sockets: Set<ServerWebSocket<SocketData>>;
   alive: boolean;
+  started: boolean;
+  saveTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface SocketData {
@@ -75,7 +87,9 @@ interface SocketData {
 }
 
 const sessions = new Map<string, Session>();
+const store = new SessionStore(dbPath);
 const MAX_BUFFER = 200_000;
+let shuttingDown = false;
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -117,13 +131,29 @@ function stripAnsi(text: string): string {
     .replace(/\x1b[@-Z\\-_]/g, '');
 }
 
+/** Looks for the CLI's own saved session file (~/.stock/projects/<dir>/<id>.jsonl). */
+function hasCliSession(id: string): boolean {
+  const root = join(homedir(), '.stock', 'projects');
+  if (!existsSync(root)) return false;
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (existsSync(join(root, entry.name, `${id}.jsonl`))) return true;
+    }
+  } catch {
+    // Ignore unreadable project dirs.
+  }
+  return false;
+}
+
 function summary(session: Session) {
   return {
     id: session.id,
     title: session.title,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
-    alive: session.alive,
+    alive: session.alive && Boolean(session.proc),
+    started: session.started,
   };
 }
 
@@ -133,6 +163,14 @@ function listSessions() {
     .map(summary);
 }
 
+function scheduleSave(session: Session): void {
+  if (session.saveTimer) return;
+  session.saveTimer = setTimeout(() => {
+    session.saveTimer = undefined;
+    store.saveOutput(session.id, session.buffer, session.updatedAt);
+  }, 500);
+}
+
 function appendOutput(session: Session, text: string): void {
   if (!text) return;
   session.buffer += text;
@@ -140,6 +178,7 @@ function appendOutput(session: Session, text: string): void {
     session.buffer = session.buffer.slice(-MAX_BUFFER);
   }
   session.updatedAt = nowIso();
+  scheduleSave(session);
   for (const socket of session.sockets) {
     try {
       socket.send(text);
@@ -149,29 +188,22 @@ function appendOutput(session: Session, text: string): void {
   }
 }
 
-function createSession(cols: number, rows: number, title?: string): Session {
-  const id = crypto.randomUUID();
+function spawnCli(session: Session, resume: boolean): void {
+  const extensions = loadStockExtensions(repoRoot);
+  const launch = buildTerminalLaunch(
+    repoRoot,
+    stockRoot,
+    extensions.catalog,
+    extensions.agentBodies,
+    { sessionId: session.id, resume },
+  );
+
   const decoder = new TextDecoder();
-  const timestamp = nowIso();
-  const session: Session = {
-    id,
-    title: title ?? defaultTitle(),
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    cols,
-    rows,
-    // Filled in below; the terminal callbacks need the session object.
-    term: null as unknown as PseudoTerminal,
-    proc: null as unknown as { kill(): void },
-    decoder,
-    buffer: '',
-    sockets: new Set(),
-    alive: true,
-  };
+  session.decoder = decoder;
 
   const term = new TerminalCtor({
-    cols,
-    rows,
+    cols: session.cols,
+    rows: session.rows,
     data(_term, chunk) {
       appendOutput(session, decoder.decode(chunk, { stream: true }));
     },
@@ -184,14 +216,6 @@ function createSession(cols: number, rows: number, title?: string): Session {
     },
   });
 
-  const extensions = loadStockExtensions(repoRoot);
-  const launch = buildTerminalLaunch(
-    repoRoot,
-    stockRoot,
-    extensions.catalog,
-    extensions.agentBodies,
-  );
-
   try {
     const proc = Bun.spawn({
       cmd: [process.execPath, ...launch.args],
@@ -201,29 +225,98 @@ function createSession(cols: number, rows: number, title?: string): Session {
     } as never);
     session.term = term;
     session.proc = proc;
+    session.alive = true;
+    session.started = true;
+    store.markStarted(session.id);
+    console.log(
+      `cli ${resume ? 'resume' : 'start'}: session=${session.id} pid=${proc.pid}`,
+    );
   } catch (error) {
+    session.term = null;
+    session.proc = null;
     session.alive = false;
     const message = error instanceof Error ? error.message : String(error);
-    session.buffer = `\r\n\x1b[31m[StockAssistant] 无法启动 CLI：${message}\x1b[0m\r\n`;
-    session.term = term;
-    session.proc = { kill: () => {} };
+    appendOutput(
+      session,
+      `\r\n\x1b[31m[StockAssistant] 无法启动 CLI：${message}\x1b[0m\r\n`,
+    );
   }
+}
 
+function ensureLiveSession(session: Session): void {
+  if (session.term && session.proc && session.alive) return;
+  const resume = session.started && hasCliSession(session.id);
+  spawnCli(session, resume);
+}
+
+function createSession(cols: number, rows: number, title?: string): Session {
+  const id = crypto.randomUUID();
+  const timestamp = nowIso();
+  const session: Session = {
+    id,
+    title: title ?? defaultTitle(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    cols,
+    rows,
+    term: null,
+    proc: null,
+    decoder: new TextDecoder(),
+    buffer: '',
+    sockets: new Set(),
+    alive: false,
+    started: true,
+  };
   sessions.set(id, session);
+  store.insert({
+    id,
+    title: session.title,
+    created_at: timestamp,
+    updated_at: timestamp,
+    output: '',
+    started: true,
+  });
+  spawnCli(session, false);
   console.log(`session created: id=${id} size=${cols}x${rows}`);
   return session;
+}
+
+function loadPersistedSessions(): void {
+  const rows = store.loadAll();
+  for (const row of rows) {
+    sessions.set(row.id, {
+      id: row.id,
+      title: row.title,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      cols: 120,
+      rows: 40,
+      term: null,
+      proc: null,
+      decoder: new TextDecoder(),
+      buffer: row.output,
+      sockets: new Set(),
+      alive: false,
+      started: row.started,
+    });
+  }
+  console.log(`sessions loaded: ${rows.length}`);
 }
 
 function deleteSession(id: string): boolean {
   const session = sessions.get(id);
   if (!session) return false;
+  if (session.saveTimer) {
+    clearTimeout(session.saveTimer);
+    session.saveTimer = undefined;
+  }
   try {
-    session.proc.kill();
+    session.proc?.kill();
   } catch {
     // Already gone.
   }
   try {
-    session.term.close();
+    session.term?.close();
   } catch {
     // Already closed.
   }
@@ -235,6 +328,7 @@ function deleteSession(id: string): boolean {
     }
   }
   sessions.delete(id);
+  store.delete(id);
   console.log(`session deleted: id=${id}`);
   return true;
 }
@@ -253,6 +347,31 @@ function exportAllSessions(): string {
   }
   return parts.join('\n');
 }
+
+function flushAll(): void {
+  for (const session of sessions.values()) {
+    if (session.saveTimer) {
+      clearTimeout(session.saveTimer);
+      session.saveTimer = undefined;
+    }
+    store.saveOutput(session.id, session.buffer, session.updatedAt);
+  }
+}
+
+function shutdown(): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    flushAll();
+    store.close();
+  } catch {
+    // Best effort on shutdown.
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 const server = Bun.serve<SocketData>({
   hostname: host,
@@ -283,6 +402,7 @@ const server = Bun.serve<SocketData>({
 
     if (method === 'DELETE' && url.pathname === '/sessions') {
       for (const id of [...sessions.keys()]) deleteSession(id);
+      store.deleteAll();
       return json({ ok: true });
     }
 
@@ -357,9 +477,15 @@ const server = Bun.serve<SocketData>({
         return;
       }
 
+      // Archived sessions (after a restart) are recreated here; the CLI
+      // resumes its own session file when available.
+      ensureLiveSession(session);
+
+      session.cols = cols;
+      session.rows = rows;
       session.sockets.add(ws);
       try {
-        session.term.resize(cols, rows);
+        session.term?.resize(cols, rows);
       } catch {
         // The CLI may have exited.
       }
@@ -371,19 +497,18 @@ const server = Bun.serve<SocketData>({
         }
       }
       console.log(
-        `terminal attach: session=${session.id} size=${cols}x${rows} sockets=${session.sockets.size}`,
+        `terminal attach: session=${session.id} size=${cols}x${rows} sockets=${session.sockets.size} alive=${session.alive}`,
       );
     },
     message(ws, message) {
       const session = sessions.get(ws.data.sessionId);
-      if (!session) return;
-      if (typeof message !== 'string') return;
+      if (!session || typeof message !== 'string') return;
 
       try {
         const payload = JSON.parse(message) as Record<string, unknown>;
         if (payload.type === 'input' && typeof payload.data === 'string') {
           session.updatedAt = nowIso();
-          session.term.write(payload.data);
+          session.term?.write(payload.data);
           return;
         }
         if (payload.type === 'resize') {
@@ -391,14 +516,14 @@ const server = Bun.serve<SocketData>({
           const rows = clamp(Number(payload.rows) || 24, 5, 200);
           session.cols = cols;
           session.rows = rows;
-          session.term.resize(cols, rows);
+          session.term?.resize(cols, rows);
           return;
         }
       } catch {
         // Not JSON: treat the frame as raw input.
       }
       session.updatedAt = nowIso();
-      session.term.write(message);
+      session.term?.write(message);
     },
     close(ws) {
       if (!ws.data.sessionId) return;
@@ -411,8 +536,11 @@ const server = Bun.serve<SocketData>({
   },
 });
 
+loadPersistedSessions();
+
 console.log(
   `StockAssistant terminal server listening on ws://${server.hostname}:${server.port}/terminal/ws`,
 );
 console.log(`  repo root : ${repoRoot}`);
 console.log(`  sessions  : http://${server.hostname}:${server.port}/sessions`);
+console.log(`  database  : ${dbPath}`);
