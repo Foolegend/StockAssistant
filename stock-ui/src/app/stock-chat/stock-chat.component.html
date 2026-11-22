@@ -401,70 +401,86 @@
               {{ agentStatus || '正在准备分析' }}
             </div>
           }
-          @if (currentActivities.length) {
-            <p class="activity-hint">点击任一步骤查看命令与返回结果。</p>
+          @if (currentTimeline.length) {
+            <p class="activity-hint">点击任一步骤查看详情。</p>
             <ul class="activity-list">
-              @for (activity of currentActivities; track trackById($index, activity)) {
+              @for (entry of currentTimeline; track entry.kind + ':' + entry.id) {
                 <li>
-                  <details class="activity-entry">
-                    <summary class="activity-summary" [title]="activityTitle(activity)">
-                      <span
-                        class="activity-indicator"
-                        [class.activity-complete]="activity.status === 'complete'"
-                        aria-hidden="true"
-                      ></span>
-                      <span class="activity-tool">{{ activityLabel(activity) }}</span>
-                      @if (activityTarget(activity); as target) {
-                        <span class="activity-desc">{{ target }}</span>
-                      }
-                      <span class="activity-state">
-                        {{ activity.status === 'complete' ? '已完成' : '进行中' }}
-                        @if (activity.durationMs !== undefined) {
-                          · {{ activity.durationMs }} ms
-                        }
-                      </span>
-                    </summary>
-                    <div class="activity-detail">
-                      @if (activity.command) {
-                        <div class="io-block">
-                          <span class="io-label">IN</span>
-                          <pre>{{ activity.command }}</pre>
-                          @if (activity.cwd) {
-                            <span class="io-cwd">工作目录：{{ activity.cwd }}</span>
-                          }
-                        </div>
-                      } @else if (activity.args) {
-                        <div class="io-block">
-                          <span class="io-label">IN</span>
-                          <pre>{{ activity.args }}</pre>
-                        </div>
-                      }
-                      @if (activity.command && activity.args && activity.tool !== 'execute') {
-                        <div class="activity-block">
-                          <span class="activity-label">参数</span>
-                          <pre>{{ activity.args }}</pre>
-                        </div>
-                      }
-                      @if (activity.output) {
-                        <div class="io-block">
-                          <span class="io-label" [class.io-error-label]="activity.error">
-                            {{ activity.error ? 'OUT · 错误' : 'OUT' }}
+                  @if (entry.thought; as thought) {
+                    <details class="thought-entry">
+                      <summary class="thought-summary">
+                        <span class="thought-indicator" aria-hidden="true"></span>
+                        <span class="thought-label">思考</span>
+                        @if (thought.durationMs !== undefined) {
+                          <span class="thought-state">
+                            · {{ thoughtDuration(thought.durationMs) }}
                           </span>
-                          <pre [class.io-error]="activity.error">{{ activity.output }}</pre>
-                        </div>
-                      }
-                      @if (!activity.command && !activity.args && !activity.output) {
-                        <p class="activity-empty">该工具没有返回可展示的详细内容。</p>
-                      }
-                    </div>
-                  </details>
+                        }
+                        <span class="thought-caret" aria-hidden="true">⌄</span>
+                      </summary>
+                      <pre class="thought-text">{{ thought.text }}</pre>
+                    </details>
+                  } @else if (entry.activity; as activity) {
+                    <details class="activity-entry">
+                      <summary class="activity-summary" [title]="activityTitle(activity)">
+                        <span
+                          class="activity-indicator"
+                          [class.activity-complete]="activity.status === 'complete'"
+                          aria-hidden="true"
+                        ></span>
+                        <span class="activity-tool">{{ activityLabel(activity) }}</span>
+                        @if (activityTarget(activity); as target) {
+                          <span class="activity-desc">{{ target }}</span>
+                        }
+                        <span class="activity-state">
+                          {{ activity.status === 'complete' ? '已完成' : '进行中' }}
+                          @if (activity.durationMs !== undefined) {
+                            · {{ activity.durationMs }} ms
+                          }
+                        </span>
+                      </summary>
+                      <div class="activity-detail">
+                        @if (activity.command) {
+                          <div class="io-block">
+                            <span class="io-label">IN</span>
+                            <pre>{{ activity.command }}</pre>
+                            @if (activity.cwd) {
+                              <span class="io-cwd">工作目录：{{ activity.cwd }}</span>
+                            }
+                          </div>
+                        } @else if (activity.args) {
+                          <div class="io-block">
+                            <span class="io-label">IN</span>
+                            <pre>{{ activity.args }}</pre>
+                          </div>
+                        }
+                        @if (activity.command && activity.args && activity.tool !== 'execute') {
+                          <div class="activity-block">
+                            <span class="activity-label">参数</span>
+                            <pre>{{ activity.args }}</pre>
+                          </div>
+                        }
+                        @if (activity.output) {
+                          <div class="io-block">
+                            <span class="io-label" [class.io-error-label]="activity.error">
+                              {{ activity.error ? 'OUT · 错误' : 'OUT' }}
+                            </span>
+                            <pre [class.io-error]="activity.error">{{ activity.output }}</pre>
+                          </div>
+                        }
+                        @if (!activity.command && !activity.args && !activity.output) {
+                          <p class="activity-empty">该工具没有返回可展示的详细内容。</p>
+                        }
+                      </div>
+                    </details>
+                  }
                 </li>
               }
             </ul>
           }
-          @if (!isLoading && !currentActivities.length) {
+          @if (!isLoading && !currentTimeline.length) {
             <p class="evidence-empty">
-              智能体调用工具后，执行步骤会显示在这里。
+              智能体思考或调用工具后，步骤会显示在这里。
             </p>
           }
         </section>

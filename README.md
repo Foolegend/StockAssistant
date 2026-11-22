@@ -18,7 +18,7 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP (Model
 ### 2. 前端 (stock-ui)
 基于 **Angular** 构建的对话优先研究工作台。
 - **分析会话**：最近 30 条对话保存在当前浏览器本地。
-- **过程可见**：展示后端实际报告的分析状态与工具调用（命令/参数/结果），并标注本次使用的 Agent、Command、Skill 与 MCP。
+- **过程可见**：展示后端实际报告的分析状态、模型思考（模型返回 `<think>` 时）与工具调用（命令/参数/结果），并标注本次使用的 Agent、Command、Skill 与 MCP。
 - **能力可见**：顶栏“能力”面板按命令/技能/智能体/MCP/钩子分组展示，输入框键入 `/` 可搜索并插入命令或技能。
 - **依据可追溯**：列出回答中明确提供的网页链接；未附链接时明确提示来源未经核实。
 - **响应式设计**：在桌面端并列显示对话与依据面板，小屏幕下纵向排列。
@@ -92,6 +92,8 @@ Hook 从扩展目录下的 `hooks/hooks.json` 加载，使用原生事件名、m
 `PreToolUse` 和 `PostToolUse` 会在工具调用前后执行；其他事件会被读取，但当前尚未连接到运行时触发点。命令在后端工作目录中以 shell 运行并继承后端环境变量，JSON 事件上下文通过 stdin 传递。`PreToolUse` 非零退出会阻止工具运行；命令非零退出或超时会使请求失败。Hook 以服务端身份执行，只应配置可信命令；`stock-server/.stock/settings.json` 不会被导入或执行。
 
 Agent frontmatter 中的模型选择目前不映射到其他模型；运行模型由 `stock-server/.env` 中的 `CHAT_MODEL` 决定。修改扩展文件后需重启后端以重新扫描。
+
+若希望右侧“执行过程”显示可折叠的“思考”行，需要选择会输出 `<think>…</think>` 的模型（如 MiniMax-M2.5 / M2.7 / M3；MiniMax-M3.1-Flash 不输出思考内容）。后端会自动从模型内容中提取思考块，并按时间顺序与工具步骤交错展示。
 
 MCP server 在扩展目录下的 `mcp-configs/mcp-servers.json` 中登记，配置使用 `mcpServers` 对象。例如：
 

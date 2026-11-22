@@ -16,6 +16,7 @@ from src.agent.UnifiedAgent import (
     AgentConfig,
     PLUGIN_ROOT,
     _ProjectRootShellBackend,
+    _split_thinking,
     _tool_command,
     _to_virtual_tool_path,
     build_agent,
@@ -270,6 +271,14 @@ class UnifiedAgentTests(unittest.TestCase):
         self.assertEqual(_tool_command("write_file", {"file_path": "/x"}, "/root"), "")
         self.assertEqual(_tool_command("edit_file", {"file_path": "/x"}, "/root"), "")
 
+    def test_split_thinking_removes_think_blocks(self):
+        answer, thought = _split_thinking(
+            "<think>Check the filing first.</think>\n\nFinal answer"
+        )
+
+        self.assertEqual(answer, "Final answer")
+        self.assertEqual(thought, "Check the filing first.")
+
     def test_quant_tool_command_carries_base64_arguments(self):
         command = _tool_command("normalize_symbol", {"code": "600519"}, "/root")
 
@@ -353,6 +362,66 @@ class AgentStreamingTests(unittest.TestCase):
         self.assertIsInstance(events[1][1]["duration_ms"], int)
         self.assertEqual(agent.config["configurable"]["thread_id"], "stream-thread")
         self.assertEqual(agent.kwargs["stream_mode"], "updates")
+
+    def test_stream_emits_thoughts_and_strips_them_from_the_answer(self):
+        class ThinkingAgent:
+            def stream(self, _input, config=None, **kwargs):
+                yield {
+                    "agent": {
+                        "messages": [
+                            AIMessage(
+                                content="<think>Look up a quote.</think>",
+                                tool_calls=[
+                                    {
+                                        "id": "call-1",
+                                        "name": "quote",
+                                        "args": {},
+                                        "type": "tool_call",
+                                    }
+                                ],
+                            )
+                        ]
+                    }
+                }
+                yield {
+                    "tools": {
+                        "messages": [
+                            ToolMessage(
+                                content="latest quote",
+                                tool_call_id="call-1",
+                                name="quote",
+                            )
+                        ]
+                    }
+                }
+                yield {
+                    "agent": {
+                        "messages": [
+                            AIMessage(
+                                content="<think>Summarize the quote.</think>Final answer"
+                            )
+                        ]
+                    }
+                }
+
+        events = []
+        with patch(
+            "src.agent.UnifiedAgent._cached_agent", return_value=ThinkingAgent()
+        ):
+            answer, cancelled = stream_agent(
+                "分析 TSLA",
+                on_event=lambda event, data: events.append((event, data)),
+            )
+
+        self.assertFalse(cancelled)
+        self.assertEqual(answer, "Final answer")
+        self.assertEqual(
+            [event for event, _data in events],
+            ["thought", "tool_start", "tool_end", "thought"],
+        )
+        self.assertEqual(events[0][1]["text"], "Look up a quote.")
+        self.assertEqual(events[3][1]["text"], "Summarize the quote.")
+        self.assertIsInstance(events[0][1]["duration_ms"], int)
 
     def test_stream_stops_before_requesting_the_next_graph_update(self):
         agent = self.FakeAgent()

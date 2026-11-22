@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent.UnifiedAgent import (
     AgentConfig,
+    _split_thinking,
     ask_agent,
     default_system_prompt,
     delete_thread_memory,
@@ -231,10 +232,7 @@ def _answer_directly(question: str, thread_id: str = "") -> str:
     messages.append(HumanMessage(content=question))
 
     response = make_llm().invoke(messages)
-    content = response.content
-    if isinstance(content, list):
-        content = "\n".join(str(item) for item in content)
-    answer = str(content).strip()
+    answer, _thoughts = _split_thinking(response.content)
     return answer or "抱歉，我暂时没有生成回复，请稍后再试。"
 
 
@@ -420,6 +418,7 @@ def _run_agent_chat(
         report("status", {"stage": "analysis", "message": "正在生成回复"})
         if streaming:
             answer_parts = []
+            started = time.perf_counter()
             history = build_history_context(req.thread_id)
             stream_messages: list = [
                 SystemMessage(content=_system_prompt_with_preferences())
@@ -440,7 +439,18 @@ def _run_agent_chat(
                     answer_parts.extend(str(item) for item in content)
                 else:
                     answer_parts.append(str(content))
-            answer = "".join(answer_parts).strip()
+            answer, thoughts = _split_thinking("".join(answer_parts).strip())
+            if thoughts:
+                report(
+                    "thought",
+                    {
+                        "thought_id": "direct-thought",
+                        "text": thoughts,
+                        "duration_ms": int(
+                            (time.perf_counter() - started) * 1000
+                        ),
+                    },
+                )
             answer = answer or "抱歉，我暂时没有生成回复，请稍后再试。"
         else:
             answer = _answer_directly(req.question, req.thread_id)

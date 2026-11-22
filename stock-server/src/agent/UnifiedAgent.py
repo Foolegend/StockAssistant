@@ -437,11 +437,48 @@ def ask_agent(question: str, config: Optional[AgentConfig] = None, thread_id: st
 
     last_message = messages[-1]
     if hasattr(last_message, "content"):
-        content = last_message.content
-        if isinstance(content, list):
-            return "\n".join(str(item) for item in content)
-        return str(content)
+        content, _thoughts = _split_thinking(last_message.content)
+        return content
     return str(last_message)
+
+
+_THINKING_TAG_RE = re.compile(
+    r"<(think|thinking|reasoning)>(.*?)</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _content_text(content: object) -> str:
+    """Flatten an AI message payload (text or content blocks) to plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            else:
+                try:
+                    parts.append(json.dumps(item, ensure_ascii=False, default=str))
+                except (TypeError, ValueError):
+                    parts.append(str(item))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _split_thinking(content: object) -> tuple[str, str]:
+    """Split MiniMax/DeepSeek-style ``<think>`` blocks from the answer text."""
+    text = _content_text(content)
+    thoughts = [
+        match.group(2).strip()
+        for match in _THINKING_TAG_RE.finditer(text)
+        if match.group(2).strip()
+    ]
+    return _THINKING_TAG_RE.sub("", text).strip(), "\n\n".join(thoughts).strip()
 
 
 MAX_TOOL_DETAIL_CHARS = 4000
@@ -611,8 +648,10 @@ def stream_agent(
     final_answer = ""
     tool_names = {}
     tool_started_at = {}
+    seen_thoughts: set[str] = set()
     project_root = str(_agent_project_root(agent))
     started = time.perf_counter()
+    step_started_at = started
 
     for update in agent.stream(
         _agent_input(question, config),
@@ -631,6 +670,25 @@ def stream_agent(
             if not isinstance(messages, list):
                 messages = [messages]
             for message in messages:
+                content = getattr(message, "content", None)
+                cleaned_content, thoughts = ("", "")
+                if getattr(message, "type", None) == "ai":
+                    cleaned_content, thoughts = _split_thinking(content)
+                if thoughts and on_event is not None:
+                    thought_key = str(getattr(message, "id", None) or thoughts[:200])
+                    if thought_key not in seen_thoughts:
+                        seen_thoughts.add(thought_key)
+                        on_event(
+                            "thought",
+                            {
+                                "thought_id": thought_key,
+                                "text": _truncate_tool_detail(thoughts),
+                                "duration_ms": int(
+                                    (time.perf_counter() - step_started_at) * 1000
+                                ),
+                            },
+                        )
+
                 tool_calls = getattr(message, "tool_calls", []) or []
                 for tool_call in tool_calls:
                     tool_id = tool_call.get("id")
@@ -674,12 +732,14 @@ def stream_agent(
                                 ),
                             },
                         )
-                elif not tool_calls and hasattr(message, "content"):
-                    content = message.content
-                    if isinstance(content, list):
-                        final_answer = "\n".join(str(item) for item in content)
-                    else:
-                        final_answer = str(content)
+                elif (
+                    not tool_calls
+                    and getattr(message, "type", None) == "ai"
+                    and content is not None
+                ):
+                    final_answer = cleaned_content
+
+        step_started_at = time.perf_counter()
 
     logger.info(
         "agent stream finished thread_id=%s chars=%d duration=%.1f ms",

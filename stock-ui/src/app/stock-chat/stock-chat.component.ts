@@ -36,6 +36,22 @@ interface AgentActivity {
   durationMs?: number;
 }
 
+interface AgentThought {
+  id: string;
+  text: string;
+  durationMs?: number;
+}
+
+interface TimelineItem {
+  kind: 'thought' | 'tool';
+  id: string;
+}
+
+interface TimelineEntry extends TimelineItem {
+  thought?: AgentThought;
+  activity?: AgentActivity;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -44,6 +60,9 @@ interface ChatMessage {
   status?: string;
   cancelled?: boolean;
   activities?: AgentActivity[];
+  thoughts?: AgentThought[];
+  /** Chronological thought/tool order for the evidence panel. */
+  timeline?: TimelineItem[];
   sources?: SourceLink[];
   agentId?: string | null;
   model?: string | null;
@@ -221,6 +240,62 @@ export class StockChatComponent {
       }
     }
     return [];
+  }
+
+  get currentTimeline(): TimelineEntry[] {
+    const messages = this.currentConversation.messages;
+    let message: ChatMessage | undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'assistant') {
+        message = messages[index];
+        break;
+      }
+    }
+    if (!message) {
+      return [];
+    }
+    const thoughts = message.thoughts ?? [];
+    const activities = message.activities ?? [];
+    const items = message.timeline ?? [];
+    if (!items.length) {
+      return [
+        ...thoughts.map((thought) => ({
+          kind: 'thought' as const,
+          id: thought.id,
+          thought,
+        })),
+        ...activities.map((activity) => ({
+          kind: 'tool' as const,
+          id: activity.id,
+          activity,
+        })),
+      ];
+    }
+    const entries: TimelineEntry[] = [];
+    for (const item of items) {
+      if (item.kind === 'thought') {
+        const thought = thoughts.find((entry) => entry.id === item.id);
+        if (thought) {
+          entries.push({ kind: 'thought', id: item.id, thought });
+        }
+      } else {
+        const activity = activities.find((entry) => entry.id === item.id);
+        if (activity) {
+          entries.push({ kind: 'tool', id: item.id, activity });
+        }
+      }
+    }
+    return entries;
+  }
+
+  thoughtDuration(durationMs: number | undefined): string {
+    if (durationMs === undefined) {
+      return '';
+    }
+    if (durationMs >= 1000) {
+      return `${(durationMs / 1000).toFixed(1)} s`;
+    }
+    return `${durationMs} ms`;
   }
 
   get currentUsage(): UsageInfo | null {
@@ -851,6 +926,14 @@ export class StockChatComponent {
     }
   }
 
+  private appendTimeline(
+    message: ChatMessage,
+    kind: 'thought' | 'tool',
+    id: string,
+  ): void {
+    (message.timeline ??= []).push({ kind, id });
+  }
+
   private isCapabilityRef(value: unknown): value is CapabilityRef {
     if (typeof value !== 'object' || value === null) {
       return false;
@@ -1082,6 +1165,26 @@ export class StockChatComponent {
         this.agentStatus = message;
       }
       this.applyUsage(assistant, data);
+    } else if (event.event === 'thought') {
+      const text = typeof data['text'] === 'string' ? data['text'].trim() : '';
+      if (text) {
+        assistant.thoughts ??= [];
+        const id =
+          typeof data['thought_id'] === 'string'
+            ? data['thought_id']
+            : this.createId();
+        const duration = data['duration_ms'];
+        const thought: AgentThought = {
+          id,
+          text,
+          ...(typeof duration === 'number' && Number.isFinite(duration)
+            ? { durationMs: duration }
+            : {}),
+        };
+        assistant.thoughts.push(thought);
+        this.appendTimeline(assistant, 'thought', id);
+        this.agentStatus = '思考完成，继续分析';
+      }
     } else if (event.event === 'tool_start') {
       const toolId = typeof data['tool_id'] === 'string' ? data['tool_id'] : this.createId();
       const tool = typeof data['tool'] === 'string' ? data['tool'] : '分析工具';
@@ -1097,6 +1200,7 @@ export class StockChatComponent {
         ...(command ? { command, ...(cwd ? { cwd } : {}) } : {}),
       };
       assistant.activities.push(activity);
+      this.appendTimeline(assistant, 'tool', activity.id);
       const label = this.activityLabel(activity);
       const target = this.activityTarget(activity);
       this.agentStatus = target ? `正在${label}：${target}` : `正在${label}`;

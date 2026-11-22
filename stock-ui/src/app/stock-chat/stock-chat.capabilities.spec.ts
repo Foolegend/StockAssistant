@@ -148,6 +148,52 @@ describe('StockChatComponent capabilities', () => {
     expect(component.sendChat).not.toHaveBeenCalled();
   });
 
+  it('interleaves thought rows with tool steps', async () => {
+    const stream = [
+      {
+        event: 'thought',
+        data: { thought_id: 'thought-1', text: '先核对公告。', duration_ms: 1200 },
+      },
+      {
+        event: 'tool_start',
+        data: {
+          tool_id: 'tool-1',
+          tool: 'execute',
+          args: '{"command":"echo hi"}',
+          command: 'echo hi',
+        },
+      },
+      {
+        event: 'tool_end',
+        data: { tool_id: 'tool-1', tool: 'execute', output: 'hi', duration_ms: 5 },
+      },
+      {
+        event: 'thought',
+        data: { thought_id: 'thought-2', text: '整理结论。', duration_ms: 300 },
+      },
+      { event: 'complete', data: { answer: '完成', sources: [] } },
+    ]
+      .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      .join('');
+    (window.fetch as jasmine.Spy).and.resolveTo(new Response(stream));
+
+    component.userQuestion = '分析一下';
+    await component.sendChat();
+    fixture.detectChanges();
+
+    const entries = Array.from(
+      fixture.nativeElement.querySelectorAll(
+        '.evidence-panel .activity-list > li',
+      ),
+    ) as HTMLElement[];
+    expect(entries.length).toBe(3);
+    expect(entries[0].querySelector('.thought-label')?.textContent).toContain('思考');
+    expect(entries[0].querySelector('.thought-state')?.textContent).toContain('1.2 s');
+    expect(entries[0].querySelector('.thought-text')?.textContent).toContain('先核对公告');
+    expect(entries[1].querySelector('.activity-tool')?.textContent).toContain('执行命令');
+    expect(entries[2].querySelector('.thought-text')?.textContent).toContain('整理结论');
+  });
+
   it('renders usage chips from status and complete events', async () => {
     const stream = [
       {

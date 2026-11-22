@@ -165,6 +165,29 @@ class ChatApiStreamingTests(unittest.TestCase):
         self.assertIn('"title": "公司公告"', response.text)
         self.assertIn('"url": "https://example.com/filing"', response.text)
 
+    def test_stream_reports_direct_answer_thoughts(self):
+        class FakeModel:
+            def stream(self, _messages):
+                return iter(
+                    [
+                        SimpleNamespace(
+                            content="<think>Greet briefly.</think>你好！"
+                        )
+                    ]
+                )
+
+        client = TestClient(app)
+        with patch("src.api.chat.make_llm", return_value=FakeModel()):
+            response = client.post(
+                "/agent/chat/stream",
+                json={"question": "你好", "run_id": "direct-thought"},
+            )
+
+        self.assertIn("event: thought", response.text)
+        self.assertIn('"text": "Greet briefly."', response.text)
+        self.assertIn('"answer": "你好！"', response.text)
+        self.assertNotIn("<think>", response.text)
+
     def test_cancel_endpoint_signals_the_active_run(self):
         run_id = "cancel-test"
         stop_event = Event()
