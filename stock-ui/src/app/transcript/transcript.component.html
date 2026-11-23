@@ -1,0 +1,131 @@
+<section class="transcript">
+  <header class="transcript-header">
+    <div class="transcript-title">
+      <span class="dot" [class.online]="connected"></span>
+      <strong>分析过程</strong>
+      <span class="transcript-meta">{{ metaText }}</span>
+    </div>
+    <div class="header-actions">
+      <button
+        type="button"
+        class="collapse-all"
+        (click)="toggleAll()"
+        [disabled]="!turns.length"
+      >
+        {{ allCollapsed ? '展开全部' : '折叠全部' }}
+      </button>
+      <button
+        type="button"
+        class="refresh"
+        (click)="reload()"
+        [disabled]="!sessionId"
+      >
+        刷新
+      </button>
+    </div>
+  </header>
+
+  <div class="transcript-body" #scroller>
+    @if (!sessionId) {
+      <p class="transcript-empty">选择或新建一个会话后，这里会显示完整的分析过程。</p>
+    } @else if (!turns.length) {
+      <p class="transcript-empty">
+        在下方输入问题，思考过程、工具调用与最终结论会实时出现在这里。
+      </p>
+    } @else {
+      @for (turn of turns; track turn.index) {
+        <section class="turn">
+          <div class="user-bubble">{{ turn.prompt }}</div>
+
+          @for (entry of turn.entries; track entry.key) {
+            @switch (entry.kind) {
+              @case ('thought') {
+                <details class="thought" data-step>
+                  <summary>
+                    思考了 {{ duration(entry.durationMs) }}
+                    <span class="chevron" aria-hidden="true">›</span>
+                  </summary>
+                  <pre>{{ entry.text }}</pre>
+                </details>
+              }
+              @case ('tool') {
+                <details class="tool" [class.failed]="entry.error" data-step open>
+                  <summary class="tool-head">
+                    <span class="tool-dot" aria-hidden="true"></span>
+                    <b>{{ toolLabel(entry.tool) }}</b>
+                    @if (toolTarget(entry.args); as target) {
+                      <span class="tool-target">{{ target }}</span>
+                    }
+                    <span class="chevron" aria-hidden="true">›</span>
+                  </summary>
+                  <div class="io">
+                    <span class="io-label">IN</span>
+                    <pre>{{ prettyArgs(entry.args) }}</pre>
+                  </div>
+                  @if (entry.output !== undefined) {
+                    <div class="io out" [class.failed]="entry.error">
+                      <span class="io-label">
+                        OUT{{ entry.error ? ' · 失败' : '' }}
+                      </span>
+                      <pre>{{ entry.output }}</pre>
+                    </div>
+                  }
+                </details>
+              }
+              @case ('text') {
+                <article
+                  class="answer"
+                  [innerHTML]="entry.text | markdown"
+                ></article>
+              }
+            }
+          }
+
+          @if (turn.answer) {
+            <article class="answer final" [innerHTML]="turn.answer | markdown"></article>
+          }
+        </section>
+      }
+    }
+
+    @if (running) {
+      <p class="running-indicator">
+        <span class="pulse" aria-hidden="true"></span>
+        正在分析，过程会实时更新…
+      </p>
+    }
+  </div>
+
+  <footer class="composer">
+    <textarea
+      #composer
+      [(ngModel)]="draft"
+      (keydown)="onKeydown($event)"
+      rows="1"
+      placeholder="输入问题，Enter 发送，Shift+Enter 换行"
+      aria-label="输入问题"
+    ></textarea>
+    <div class="composer-actions">
+      <button
+        type="button"
+        class="stop"
+        (click)="stop()"
+        [disabled]="!running"
+      >
+        停止
+      </button>
+      <button
+        type="button"
+        class="send"
+        (click)="send()"
+        [disabled]="!draft.trim() || sending"
+      >
+        发送
+      </button>
+    </div>
+  </footer>
+
+  @if (error) {
+    <p class="composer-error">{{ error }}</p>
+  }
+</section>

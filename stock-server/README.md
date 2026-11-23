@@ -50,6 +50,10 @@ server-side PTY sessions:
   session = one CLI process, and disconnecting does not kill it
 - `GET/POST/DELETE /sessions` — list, create, delete sessions
 - `GET /sessions/{id}/output` and `GET /sessions/export` — export output
+- `GET /sessions/{id}/transcript` — structured transcript of the session
+  (turns, thinking, tool calls, answers), parsed from the CLI's own JSONL file
+- `GET /sessions/{id}/transcript/stream` — the same transcript as an SSE
+  stream, pushed whenever the CLI writes to its transcript
 - `GET /health` — health check
 - Sessions (metadata + bounded output buffer) are persisted in SQLite
   (`data/terminal-sessions.db`); on re-attach the CLI resumes via `--resume`
@@ -59,7 +63,8 @@ server-side PTY sessions:
   are injected by [terminal/wiring.ts](terminal/wiring.ts)
 
 The Angular UI embeds this terminal with xterm.js and lists sessions in the left
-sidebar (see the repository README).
+sidebar (see the repository README). The main view renders the structured
+transcript; the raw terminal stays available behind a toggle.
 
 `start` runs:
 

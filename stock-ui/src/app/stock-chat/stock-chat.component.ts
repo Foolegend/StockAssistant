@@ -15,9 +15,9 @@ import {
   SlashSuggestion,
   UsageInfo,
 } from '../extensions/capabilities.types';
-import { AnalysisPanelComponent } from '../analysis/analysis-panel.component';
 import { CapabilitiesDialogComponent } from '../extensions/capabilities-dialog.component';
 import { TerminalComponent } from '../terminal/terminal.component';
+import { TranscriptComponent } from '../transcript/transcript.component';
 
 interface SourceLink {
   title: string;
@@ -164,7 +164,7 @@ const TOOL_TARGET_KEYS = [
     FormsModule,
     CapabilitiesDialogComponent,
     TerminalComponent,
-    AnalysisPanelComponent,
+    TranscriptComponent,
   ],
   changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './stock-chat.component.html',
@@ -188,7 +188,8 @@ export class StockChatComponent implements OnDestroy {
   conversations: ChatConversation[] = [];
   currentConversation: ChatConversation;
   activeSessionId: string | null = null;
-  terminalCollapsed = false;
+  /** True shows the raw PTY terminal instead of the structured transcript. */
+  showRawTerminal = false;
   userQuestion = '';
   isLoading = false;
   conversationLoading = false;
@@ -249,8 +250,9 @@ export class StockChatComponent implements OnDestroy {
     if (this.sessionPoll) clearInterval(this.sessionPoll);
   }
 
-  toggleTerminal(): void {
-    this.terminalCollapsed = !this.terminalCollapsed;
+  /** Switches between the structured transcript and the raw PTY terminal. */
+  toggleRawTerminal(): void {
+    this.showRawTerminal = !this.showRawTerminal;
     this.cdr.markForCheck();
   }
 

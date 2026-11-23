@@ -15,6 +15,8 @@
  *   DELETE /sessions/:id
  *   GET    /sessions/export
  *   GET    /sessions/:id/output
+ *   GET    /sessions/:id/transcript
+ *   GET    /sessions/:id/transcript/stream   (SSE, live transcript)
  *
  * WebSocket:
  *   /terminal/ws?session=<id>&cols=<n>&rows=<n>
@@ -22,12 +24,17 @@
  *   server -> client: session buffer replay + raw ANSI output
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { loadStockExtensions } from '../lib/catalog';
 import { SessionStore } from './store';
+import {
+  clearTranscriptCache,
+  hasCliSession,
+  readTranscript,
+  stripAnsi,
+  type Transcript,
+} from './transcript';
 import { buildTerminalLaunch } from './wiring';
 
 const serverDir = import.meta.dir;
@@ -84,6 +91,8 @@ interface SocketData {
   sessionId: string;
   cols: number;
   rows: number;
+  /** When false the terminal buffer is not replayed to the client. */
+  echo: boolean;
 }
 
 const sessions = new Map<string, Session>();
@@ -124,254 +133,60 @@ function defaultTitle(): string {
   return `终端会话 ${hh}:${mm}:${ss}`;
 }
 
-function stripAnsi(text: string): string {
-  return text
-    .replace(/\x1b\][^\x07]*\x07/g, '')
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b[@-Z\\-_]/g, '');
-}
-
-/** Finds the CLI's own saved session file (~/.stock/projects/<dir>/<id>.jsonl). */
-function findCliSessionPath(id: string): string | null {
-  const root = join(homedir(), '.stock', 'projects');
-  if (!existsSync(root)) return null;
-  try {
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const file = join(root, entry.name, `${id}.jsonl`);
-      if (existsSync(file)) return file;
-    }
-  } catch {
-    // Ignore unreadable project dirs.
-  }
-  return null;
-}
-
-function hasCliSession(id: string): boolean {
-  return findCliSessionPath(id) !== null;
-}
-
-interface AnalysisMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string | null;
-}
-
-interface AnalysisStep {
-  kind: 'user' | 'thought' | 'tool_start' | 'tool_end' | 'text';
-  text?: string;
-  tool?: string;
-  tool_id?: string;
-  args?: string;
-  output?: string;
-  error?: boolean;
-  timestamp: string | null;
-}
-
-const MAX_STEP_CHARS = 4000;
-
-function truncateText(value: string, max = MAX_STEP_CHARS): string {
-  return value.length > max ? `${value.slice(0, max)}…` : value;
-}
-
-function textBlocks(content: unknown): string {
-  if (typeof content === 'string') return content.trim();
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => {
-        if (!block || typeof block !== 'object') return '';
-        const item = block as { type?: unknown; text?: unknown };
-        return item.type === 'text' ? String(item.text ?? '') : '';
-      })
-      .filter(Boolean)
-      .join('\n')
-      .trim();
-  }
-  return '';
+/**
+ * Renames a session after its first prompt, so the sidebar shows the question
+ * instead of a timestamp.
+ */
+function syncSessionTitle(session: Session, transcript: Transcript): void {
+  const first = transcript.turns[0]?.prompt;
+  if (!first) return;
+  if (!session.title.startsWith('终端会话 ')) return;
+  const title = first.length > 28 ? `${first.slice(0, 28)}…` : first;
+  session.title = title;
+  store.rename(session.id, title);
 }
 
 /**
- * Extracts the last turn's analysis process (thoughts, tool calls and tool
- * results) plus the final assistant answer from the CLI transcript.
+ * Server-sent events stream of the session transcript.
+ *
+ * The CLI appends to its JSONL transcript as the conversation progresses, so
+ * the stream re-reads the file and pushes it whenever it changed.  The client
+ * therefore sees thoughts, tool calls and the answer while they happen,
+ * instead of polling for them.
  */
-function readAnalysis(id: string): {
-  answer: string | null;
-  updated_at: string | null;
-  steps: AnalysisStep[];
-  messages: AnalysisMessage[];
-  turnRunning: boolean;
-} {
-  const empty = {
-    answer: null,
-    updated_at: null,
-    steps: [] as AnalysisStep[],
-    messages: [] as AnalysisMessage[],
-    turnRunning: false,
-  };
-  const file = findCliSessionPath(id);
-  if (!file) return empty;
+function transcriptEventStream(sessionId: string): Response {
+  const encoder = new TextEncoder();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let last = '';
 
-  const steps: AnalysisStep[] = [];
-  const messages: AnalysisMessage[] = [];
-  let lastTimestamp: string | null = null;
-  let lastAssistantStepIndex = -1;
-  let lastAssistantStopReason: string | null = null;
-
-  try {
-    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let record: Record<string, unknown>;
-      try {
-        record = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      if (record.type !== 'user' && record.type !== 'assistant') continue;
-      if (record.isSidechain === true) continue;
-
-      const timestamp =
-        typeof record.timestamp === 'string' ? record.timestamp : null;
-      if (timestamp) lastTimestamp = timestamp;
-      const inner = record.message as {
-        content?: unknown;
-        stop_reason?: unknown;
-      } | undefined;
-      const content = inner?.content;
-
-      if (record.type === 'user') {
-        if (typeof content === 'string') {
-          const text = content.trim();
-          if (text) {
-            steps.push({ kind: 'user', text, timestamp });
-            messages.push({ role: 'user', content: text, timestamp });
-          }
-        } else if (Array.isArray(content)) {
-          for (const block of content) {
-            if (!block || typeof block !== 'object') continue;
-            const item = block as {
-              type?: unknown;
-              text?: unknown;
-              tool_use_id?: unknown;
-              content?: unknown;
-              is_error?: unknown;
-            };
-            if (item.type === 'tool_result') {
-              const output = truncateText(
-                stripAnsi(textBlocks(item.content)),
-              );
-              steps.push({
-                kind: 'tool_end',
-                tool_id: String(item.tool_use_id ?? ''),
-                output,
-                error: item.is_error === true,
-                timestamp,
-              });
-            }
-            // Text blocks in user records are CLI-injected context (for
-            // example a skill body), not the user's own prompt; ignore them.
-          }
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const push = (): void => {
+        try {
+          const payload = readTranscript(sessionId);
+          const text = JSON.stringify(payload);
+          if (text === last) return;
+          last = text;
+          controller.enqueue(encoder.encode(`data: ${text}\n\n`));
+        } catch {
+          // The session may be gone; keep the stream open until it closes.
         }
-        continue;
-      }
+      };
+      push();
+      timer = setInterval(push, 600);
+    },
+    cancel() {
+      if (timer) clearInterval(timer);
+    },
+  });
 
-      // assistant
-      lastAssistantStepIndex = steps.length;
-      lastAssistantStopReason =
-        typeof inner?.stop_reason === 'string' ? inner.stop_reason : null;
-
-      if (Array.isArray(content)) {
-        for (const block of content) {
-          if (!block || typeof block !== 'object') continue;
-          const item = block as {
-            type?: unknown;
-            thinking?: unknown;
-            text?: unknown;
-            id?: unknown;
-            name?: unknown;
-            input?: unknown;
-          };
-          if (item.type === 'thinking') {
-            const text = String(item.thinking ?? '').trim();
-            if (text) {
-              steps.push({
-                kind: 'thought',
-                text: truncateText(text),
-                timestamp,
-              });
-            }
-          } else if (item.type === 'text') {
-            const text = String(item.text ?? '').trim();
-            if (text) {
-              steps.push({ kind: 'text', text, timestamp });
-              messages.push({ role: 'assistant', content: text, timestamp });
-            }
-          } else if (item.type === 'tool_use') {
-            steps.push({
-              kind: 'tool_start',
-              tool: String(item.name ?? 'tool'),
-              tool_id: String(item.id ?? ''),
-              args: truncateText(JSON.stringify(item.input ?? {}), 2000),
-              timestamp,
-            });
-          }
-        }
-      } else if (typeof content === 'string') {
-        const text = content.trim();
-        if (text) {
-          steps.push({ kind: 'text', text, timestamp });
-          messages.push({ role: 'assistant', content: text, timestamp });
-        }
-      }
-    }
-  } catch {
-    return empty;
-  }
-
-  // Keep only the latest turn's process (starting at its user prompt).
-  let lastUserIndex = -1;
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    if (steps[index].kind === 'user') {
-      lastUserIndex = index;
-      break;
-    }
-  }
-  let turnSteps =
-    lastUserIndex >= 0 ? steps.slice(lastUserIndex) : steps.slice(-80);
-
-  const hasAssistantAfterUser = lastAssistantStepIndex > lastUserIndex;
-  const turnRunning =
-    !hasAssistantAfterUser || lastAssistantStopReason === 'tool_use';
-
-  // Only a completed turn has a final answer. While tools are still running,
-  // assistant text is shown in the process timeline as an interim output.
-  let answer: string | null = null;
-  let answerTimestamp: string | null = null;
-  let answerIndex = -1;
-  if (!turnRunning) {
-    for (let index = turnSteps.length - 1; index >= 0; index -= 1) {
-      const step = turnSteps[index];
-      if (step.kind === 'text' && step.text) {
-        answer = step.text;
-        answerTimestamp = step.timestamp;
-        answerIndex = index;
-        break;
-      }
-    }
-    if (answerIndex >= 0) {
-      turnSteps = turnSteps.filter((_, index) => index !== answerIndex);
-    }
-  }
-  if (turnSteps.length > 80) {
-    turnSteps = turnSteps.slice(-80);
-  }
-
-  return {
-    answer,
-    updated_at: answerTimestamp ?? lastTimestamp,
-    steps: turnSteps,
-    messages,
-    turnRunning,
-  };
+  return new Response(stream, {
+    headers: cors({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    }),
+  });
 }
 
 function summary(session: Session) {
@@ -557,6 +372,7 @@ function deleteSession(id: string): boolean {
   }
   sessions.delete(id);
   store.delete(id);
+  clearTranscriptCache(id);
   console.log(`session deleted: id=${id}`);
   return true;
 }
@@ -643,17 +459,23 @@ const server = Bun.serve<SocketData>({
       });
     }
 
-    const analysisMatch = /^\/sessions\/([^/]+)\/analysis$/.exec(url.pathname);
-    if (method === 'GET' && analysisMatch) {
-      const id = decodeURIComponent(analysisMatch[1]);
-      const analysis = readAnalysis(id);
-      return json({
-        answer: analysis.answer,
-        updated_at: analysis.updated_at,
-        steps: analysis.steps,
-        messages: analysis.messages,
-        running: (sessions.get(id)?.alive ?? false) && analysis.turnRunning,
-      });
+    const streamMatch = /^\/sessions\/([^/]+)\/transcript\/stream$/.exec(
+      url.pathname,
+    );
+    if (method === 'GET' && streamMatch) {
+      const id = decodeURIComponent(streamMatch[1]);
+      return transcriptEventStream(id);
+    }
+
+    const transcriptMatch = /^\/sessions\/([^/]+)\/transcript$/.exec(
+      url.pathname,
+    );
+    if (method === 'GET' && transcriptMatch) {
+      const id = decodeURIComponent(transcriptMatch[1]);
+      const transcript = readTranscript(id);
+      const session = sessions.get(id);
+      if (session) syncSessionTitle(session, transcript);
+      return json(transcript);
     }
 
     const outputMatch = /^\/sessions\/([^/]+)\/output$/.exec(url.pathname);
@@ -681,8 +503,9 @@ const server = Bun.serve<SocketData>({
       const cols = clamp(Number(url.searchParams.get('cols')) || 120, 20, 400);
       const rows = clamp(Number(url.searchParams.get('rows')) || 40, 5, 200);
       const sessionId = url.searchParams.get('session') ?? '';
+      const echo = url.searchParams.get('echo') !== '0';
       const upgraded = srv.upgrade(request, {
-        data: { sessionId, cols, rows },
+        data: { sessionId, cols, rows, echo },
       });
       if (upgraded) return undefined;
       return new Response('WebSocket upgrade failed', { status: 400 });
@@ -695,7 +518,7 @@ const server = Bun.serve<SocketData>({
   },
   websocket: {
     open(ws) {
-      const { cols, rows, sessionId } = ws.data;
+      const { cols, rows, sessionId, echo } = ws.data;
       const session = sessionId ? sessions.get(sessionId) : undefined;
 
       if (!sessionId) {
@@ -730,7 +553,7 @@ const server = Bun.serve<SocketData>({
       } catch {
         // The CLI may have exited.
       }
-      if (session.buffer) {
+      if (echo && session.buffer) {
         try {
           ws.send(session.buffer);
         } catch {

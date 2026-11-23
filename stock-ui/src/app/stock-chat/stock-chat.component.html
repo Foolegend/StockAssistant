@@ -18,7 +18,7 @@
     <div class="sidebar-section">
       <p class="sidebar-label">最近研究</p>
       <nav class="conversation-list" aria-label="最近研究">
-        @for (conversation of conversations; track conversation) {
+        @for (conversation of conversations; track conversation.threadId) {
           <div
             class="conversation-item"
             [class.selected]="conversation.threadId === currentConversation.threadId"
@@ -125,21 +125,24 @@
         </div>
       </div>
       <div class="topbar-actions">
-        <button class="analysis-toggle" type="button" (click)="toggleTerminal()">
-          {{ terminalCollapsed ? '恢复终端' : '聚焦分析' }}
+        <button class="analysis-toggle" type="button" (click)="toggleRawTerminal()">
+          {{ showRawTerminal ? '结构化视图' : '原始终端' }}
         </button>
-        <span class="topbar-mode">终端模式</span>
+        <span class="topbar-mode">{{ showRawTerminal ? '终端模式' : '分析模式' }}</span>
       </div>
     </header>
 
     <div
       class="content-layout terminal-layout"
-      [class.terminal-collapsed]="terminalCollapsed"
+      [class.raw-terminal]="showRawTerminal"
     >
-      <div class="terminal-column">
-        <app-terminal class="embedded-terminal" [sessionId]="activeSessionId" />
-      </div>
-      <app-analysis-panel [sessionId]="activeSessionId" />
+      @if (showRawTerminal) {
+        <div class="terminal-column">
+          <app-terminal class="embedded-terminal" [sessionId]="activeSessionId" />
+        </div>
+      } @else {
+        <app-transcript class="transcript-column" [sessionId]="activeSessionId" />
+      }
     </div>
   </main>
 

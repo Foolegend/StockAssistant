@@ -1,0 +1,516 @@
+:host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.transcript {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: #304154;
+  background: #f5f7fa;
+}
+
+/* --- header ------------------------------------------------------------ */
+
+.transcript-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid #e4e9ef;
+  background: #fff;
+}
+
+.transcript-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.transcript-title strong {
+  color: #263648;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.transcript-meta {
+  color: #7b8898;
+  font-size: 11px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #b6c0cd;
+  flex: none;
+}
+
+.dot.online {
+  background: #73a896;
+}
+
+.header-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+.refresh,
+.collapse-all {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid #dbe4ee;
+  border-radius: 6px;
+  color: #40536a;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.refresh:hover:not(:disabled),
+.collapse-all:hover:not(:disabled) {
+  border-color: #aec4dd;
+  background: #f3f7fc;
+}
+
+.refresh:disabled,
+.collapse-all:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* --- body -------------------------------------------------------------- */
+
+.transcript-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 26px 8px;
+  scroll-behavior: smooth;
+}
+
+.transcript-empty {
+  margin: 28px auto;
+  max-width: 460px;
+  color: #8a97a6;
+  font-size: 13px;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.turn {
+  max-width: 880px;
+  margin: 0 auto 30px;
+}
+
+.user-bubble {
+  max-width: min(78%, 620px);
+  margin-left: auto;
+  padding: 11px 15px;
+  border: 1px solid #dce5ef;
+  border-radius: 12px 12px 3px 12px;
+  color: #26374b;
+  background: #eaf0f7;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- thinking --------------------------------------------------------- */
+
+.thought {
+  margin: 10px 0 0;
+}
+
+.thought > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #758398;
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.thought > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chevron {
+  display: inline-block;
+  font-size: 14px;
+  transition: transform 0.15s ease;
+}
+
+.thought[open] .chevron {
+  transform: rotate(90deg);
+}
+
+.thought pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid #dfe7f2;
+  border-radius: 8px;
+  color: #4b5f78;
+  background: #f6f8fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- tool calls ------------------------------------------------------- */
+
+.tool {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid #e2e9f1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.tool.failed {
+  border-color: #e7c7bd;
+}
+
+.tool > summary.tool-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.tool > summary.tool-head::-webkit-details-marker {
+  display: none;
+}
+
+.tool-head .chevron {
+  margin-left: auto;
+  color: #8a97a6;
+}
+
+.tool[open] > summary.tool-head .chevron {
+  transform: rotate(90deg);
+}
+
+.tool-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #73a896;
+  transform: translateY(-1px);
+}
+
+.tool.failed .tool-dot {
+  background: #c08574;
+}
+
+.tool-head b {
+  color: #2d3e54;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.tool-target {
+  min-width: 0;
+  overflow: hidden;
+  color: #7f93ad;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Code blocks stay dark: they are raw tool payloads, and the light body
+   needs the contrast to keep them readable. */
+.io {
+  margin-top: 8px;
+  border: 1px solid #1e293b;
+  border-radius: 7px;
+  background: #0e141c;
+}
+
+.io-label {
+  display: block;
+  padding: 7px 11px 0;
+  color: #7e8b9b;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+}
+
+.io.failed {
+  border-color: #7f1d1d;
+}
+
+.io.failed .io-label {
+  color: #e09595;
+}
+
+.io pre {
+  margin: 0;
+  padding: 6px 11px 10px;
+  max-height: 300px;
+  overflow: auto;
+  color: #c3cedd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.io.failed pre {
+  color: #f2a6a6;
+}
+
+/* --- answers ---------------------------------------------------------- */
+
+.answer {
+  margin-top: 14px;
+  color: #304154;
+  font-size: 13px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+
+.answer.final {
+  padding-top: 12px;
+  border-top: 1px solid #e4e9ef;
+}
+
+.answer > :first-child {
+  margin-top: 0;
+}
+
+.answer > :last-child {
+  margin-bottom: 0;
+}
+
+.answer h1,
+.answer h2,
+.answer h3,
+.answer h4 {
+  margin: 18px 0 8px;
+  color: #23364b;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.answer h1 {
+  font-size: 19px;
+}
+
+.answer h2 {
+  font-size: 16px;
+}
+
+.answer h3,
+.answer h4 {
+  font-size: 14px;
+}
+
+.answer p,
+.answer ul,
+.answer ol {
+  margin: 9px 0;
+}
+
+.answer ul,
+.answer ol {
+  padding-left: 22px;
+}
+
+.answer li {
+  margin: 3px 0;
+}
+
+.answer a {
+  color: #285f9d;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.answer code {
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: #4a596c;
+  background: #eef1f5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.answer pre {
+  overflow-x: auto;
+  padding: 12px;
+  border-radius: 6px;
+  color: #e8eef6;
+  background: #26374a;
+}
+
+.answer pre code {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.answer table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.answer th,
+.answer td {
+  padding: 7px 9px;
+  border: 1px solid #e0e6ed;
+  text-align: left;
+}
+
+.answer th {
+  color: #3b5068;
+  background: #f1f4f8;
+}
+
+.answer blockquote {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-left: 2px solid #8da7c6;
+  color: #64758a;
+  background: #f4f7fa;
+}
+
+/* --- status & composer ------------------------------------------------ */
+
+.running-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px auto 12px;
+  max-width: 880px;
+  color: #8a6d3f;
+  font-size: 12px;
+}
+
+.pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #c9a35e;
+  animation: transcript-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes transcript-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.composer {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 26px 16px;
+  border-top: 1px solid #e4e9ef;
+  background: #fff;
+}
+
+.composer textarea {
+  flex: 1;
+  min-height: 42px;
+  max-height: 180px;
+  padding: 11px 13px;
+  resize: vertical;
+  border: 1px solid #dbe3ec;
+  border-radius: 10px;
+  outline: 0;
+  color: #25364a;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.composer textarea::placeholder {
+  color: #9aa6b5;
+}
+
+.composer textarea:focus {
+  border-color: #96b1d3;
+  box-shadow: 0 0 0 3px rgba(70, 116, 174, 0.09);
+}
+
+.composer-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+.composer-actions button {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.send {
+  border: 1px solid #315f9b;
+  color: #fff;
+  background: #315f9b;
+}
+
+.send:hover:not(:disabled) {
+  background: #254c7e;
+}
+
+.stop {
+  border: 1px solid #d8c8c0;
+  color: #8a594e;
+  background: #fffaf8;
+}
+
+.stop:hover:not(:disabled) {
+  background: #f8ece8;
+}
+
+.composer-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.composer-error {
+  flex: none;
+  margin: 0;
+  padding: 0 26px 12px;
+  color: #9a493c;
+  font-size: 12px;
+  background: #fff;
+}

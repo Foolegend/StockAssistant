@@ -84,6 +84,10 @@ export class TerminalComponent
     this.term = term;
     this.fitAddon = fitAddon;
 
+    // Fit before connecting: the server resizes the PTY to the size we
+    // announce, and xterm's default 80x24 would make the CLI render one
+    // frame for the wrong geometry.
+    this.fit();
     requestAnimationFrame(() => this.fit());
     this.resizeObserver = new ResizeObserver(() => this.fit());
     this.resizeObserver.observe(this.host.nativeElement);

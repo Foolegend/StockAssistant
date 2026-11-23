@@ -95,6 +95,12 @@ export class SessionStore {
       .run(id);
   }
 
+  rename(id: string, title: string): void {
+    this.db
+      .query('UPDATE terminal_sessions SET title = ? WHERE id = ?')
+      .run(title, id);
+  }
+
   delete(id: string): void {
     this.db.query('DELETE FROM terminal_sessions WHERE id = ?').run(id);
   }

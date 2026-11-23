@@ -28,9 +28,10 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP（Mode
 
 ### 2. 前端（stock-ui）
 
-- **终端页面**：[terminal.component.ts](stock-ui/src/app/terminal/terminal.component.ts)，基于 **xterm.js**
+- **分析视图（默认）**：[transcript.component.ts](stock-ui/src/app/transcript/transcript.component.ts)，把 CLI 自己的会话转写（`~/.stock/projects/*/<id>.jsonl`）渲染成「用户提问 → 思考 → 工具调用（IN/OUT）→ 最终结论」的证据链，通过 SSE 实时更新；底部自带输入框，输入经 WebSocket 写回 CLI 的 REPL
+- **原始终端（顶栏切换）**：[terminal.component.ts](stock-ui/src/app/terminal/terminal.component.ts)，基于 **xterm.js**，展示 CLI 的 Ink 界面原貌
 - 默认路由 `/` 重定向到 `/terminal`
-- WebSocket 连接：`ws://127.0.0.1:8015/terminal/ws?session=<id>&cols=...&rows=...`
+- WebSocket 连接：`ws://127.0.0.1:8015/terminal/ws?session=<id>&cols=...&rows=...`（加 `&echo=0` 可跳过缓冲区回放）
 - 左侧会话栏来自服务端 `GET /sessions`：新建、切换、删除、导出都对应真实 PTY 会话
 - 切换会话会重连并回放该会话的输出；未选中的会话继续在服务端运行
 - 支持窗口自适应（FitAddon + ResizeObserver）、断线自动重连
@@ -64,6 +65,8 @@ HTTP 接口：
 | DELETE | `/sessions` | 删除全部会话 |
 | GET | `/sessions/{id}/output` | 导出该会话终端输出（纯文本） |
 | GET | `/sessions/export` | 导出全部会话（Markdown） |
+| GET | `/sessions/{id}/transcript` | 会话的完整结构化转写（轮次 / 思考 / 工具调用 / 结论） |
+| GET | `/sessions/{id}/transcript/stream` | 同上，但以 SSE 推送，转写变化即下发 |
 
 WebSocket 必须带 `session=<id>`；未知或已删除的会话会以关闭码 `4404` / `4001` 结束，缺少会话 ID 返回 `4400`。
 
