@@ -433,6 +433,13 @@ const server = Bun.serve<SocketData>({
       return json({ ok: true });
     }
 
+    // The extension catalog: agents, skills, commands, MCP servers and hooks
+    // found in the project's `.stock` directory.
+    if (method === 'GET' && url.pathname === '/catalog') {
+      const extensions = loadStockExtensions(repoRoot);
+      return json(extensions.catalog);
+    }
+
     if (method === 'GET' && url.pathname === '/sessions') {
       return json({ sessions: listSessions() });
     }

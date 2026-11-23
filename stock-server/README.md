@@ -54,6 +54,8 @@ server-side PTY sessions:
   (turns, thinking, tool calls, answers), parsed from the CLI's own JSONL file
 - `GET /sessions/{id}/transcript/stream` — the same transcript as an SSE
   stream, pushed whenever the CLI writes to its transcript
+- `GET /catalog` — the `.stock` extension catalog (agents, skills, commands,
+  MCP servers, hooks) used by the UI's capability dialog and slash menu
 - `GET /health` — health check
 - Sessions (metadata + bounded output buffer) are persisted in SQLite
   (`data/terminal-sessions.db`); on re-attach the CLI resumes via `--resume`

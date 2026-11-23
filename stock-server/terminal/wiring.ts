@@ -60,6 +60,10 @@ export function buildTerminalLaunch(
     PATH: process.env.PATH,
     TERM: process.env.TERM ?? 'xterm-256color',
     COLORTERM: process.env.COLORTERM ?? 'truecolor',
+    // The CLI finds project commands/agents with ripgrep, which is not
+    // vendored in this source-only snapshot.  Without the native fallback
+    // the CLI silently loads zero commands and zero agents.
+    STOCK_USE_NATIVE_FILE_SEARCH: '1',
   };
 
   // Put the repo venv first so skill scripts run with the Python environment

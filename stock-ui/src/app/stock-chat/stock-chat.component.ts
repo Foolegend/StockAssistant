@@ -224,8 +224,8 @@ export class StockChatComponent implements OnDestroy {
   slashActiveIndex = 0;
   slashQuery = '';
 
-  @ViewChild('composerInput')
-  private composerInput?: ElementRef<HTMLTextAreaElement>;
+  @ViewChild(TranscriptComponent)
+  private transcript?: TranscriptComponent;
 
   private catalogRequest?: Promise<void>;
   private abortController?: AbortController;
@@ -804,11 +804,12 @@ export class StockChatComponent implements OnDestroy {
     void this.ensureCatalog(true);
   }
 
+  /** Drops a capability from the catalog dialog into the transcript composer. */
   insertSlash(text: string): void {
-    this.userQuestion = text;
     this.capabilitiesOpen = false;
     this.closeSlashMenu();
     this.focusComposer();
+    this.transcript?.insertDraft(text);
   }
 
   onComposerInput(event: Event): void {
@@ -889,7 +890,7 @@ export class StockChatComponent implements OnDestroy {
     this.cdr.detectChanges();
     const request = (async () => {
       try {
-        const response = await fetch(`${this.apiBaseUrl}/agent/catalog`);
+        const response = await fetch(`${this.apiBaseUrl}/catalog`);
         if (!response.ok) {
           throw new Error(await this.readError(response));
         }
@@ -1018,7 +1019,7 @@ export class StockChatComponent implements OnDestroy {
   }
 
   private focusComposer(): void {
-    window.setTimeout(() => this.composerInput?.nativeElement.focus(), 0);
+    window.setTimeout(() => this.transcript?.focusComposer(), 0);
   }
 
   private applyUsage(message: ChatMessage, data: Record<string, unknown>): void {

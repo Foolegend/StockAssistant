@@ -125,6 +125,16 @@
         </div>
       </div>
       <div class="topbar-actions">
+        <button
+          class="capability-button"
+          type="button"
+          (click)="openCapabilities()"
+          title="查看当前可用的技能、命令、智能体与 MCP"
+        >
+          <span class="capability-button-icon" aria-hidden="true">◈</span>
+          能力
+          <span class="capability-button-count">{{ capabilityCount }}</span>
+        </button>
         <button class="analysis-toggle" type="button" (click)="toggleRawTerminal()">
           {{ showRawTerminal ? '结构化视图' : '原始终端' }}
         </button>

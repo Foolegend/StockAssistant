@@ -49,7 +49,7 @@
                 </details>
               }
               @case ('tool') {
-                <details class="tool" [class.failed]="entry.error" data-step open>
+                <details class="tool" [class.failed]="entry.error" data-step>
                   <summary class="tool-head">
                     <span class="tool-dot" aria-hidden="true"></span>
                     <b>{{ toolLabel(entry.tool) }}</b>
@@ -97,12 +97,35 @@
   </div>
 
   <footer class="composer">
+    @if (slashOpen && slashMatches.length) {
+      <ul class="slash-menu">
+        @for (item of slashMatches; track item.kind + ':' + item.id) {
+          <li>
+            <button
+              type="button"
+              [class.active]="isSlashActive(item)"
+              (click)="selectSlashSuggestion(item)"
+            >
+              <span class="slash-kind" [class.skill]="item.kind === 'skill'">
+                {{ item.kind === 'skill' ? '技能' : '命令' }}
+              </span>
+              <span class="slash-name">/{{ item.slashName }}</span>
+              @if (item.argumentHint) {
+                <span class="slash-hint">{{ item.argumentHint }}</span>
+              }
+              <span class="slash-desc">{{ item.description }}</span>
+            </button>
+          </li>
+        }
+      </ul>
+    }
     <textarea
       #composer
       [(ngModel)]="draft"
+      (input)="onDraftInput()"
       (keydown)="onKeydown($event)"
       rows="1"
-      placeholder="输入问题，Enter 发送，Shift+Enter 换行"
+      placeholder="输入问题，Enter 发送，Shift+Enter 换行；/ 开头可用技能与命令"
       aria-label="输入问题"
     ></textarea>
     <div class="composer-actions">

@@ -11,6 +11,10 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
+import {
+  CapabilityCatalog,
+  SlashSuggestion,
+} from '../extensions/capabilities.types';
 import { MarkdownPipe } from '../shared/markdown.pipe';
 
 const API_BASE = 'http://127.0.0.1:8015';
@@ -100,15 +104,26 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   running = false;
   connected = false;
   sending = false;
-  allCollapsed = false;
+  /** Process steps start folded; only the final answer is always visible. */
+  allCollapsed = true;
   draft = '';
   error: string | null = null;
+
+  /** Slash commands offered while the composer starts with "/". */
+  slashOpen = false;
+  slashMatches: SlashSuggestion[] = [];
+  slashIndex = 0;
+  private slashQuery = '';
 
   private source?: EventSource;
   private socket?: WebSocket;
   private disposed = false;
+  private catalog: CapabilityCatalog | null = null;
+  private catalogRequest?: Promise<void>;
 
-  constructor(private readonly cdr: ChangeDetectorRef) {}
+  constructor(private readonly cdr: ChangeDetectorRef) {
+    void this.ensureCatalog();
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (!changes['sessionId']) return;
@@ -179,10 +194,158 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   }
 
   onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    if (event.isComposing) return;
+
+    if (this.slashOpen && this.slashMatches.length) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.moveSlashSelection(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.moveSlashSelection(-1);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeSlashMenu();
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        this.applySlashSuggestion(
+          this.slashMatches[
+            Math.min(this.slashIndex, this.slashMatches.length - 1)
+          ],
+        );
+        return;
+      }
+    }
+
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       void this.send();
     }
+  }
+
+  /** Shows the slash-command menu once the composer starts with "/". */
+  onDraftInput(): void {
+    const match = /^\/(\S*)$/.exec(this.draft);
+    if (!match) {
+      this.closeSlashMenu();
+      return;
+    }
+    this.slashQuery = match[1];
+    this.slashOpen = true;
+    this.slashIndex = 0;
+    this.refreshSlashMatches();
+    this.cdr.markForCheck();
+  }
+
+  selectSlashSuggestion(suggestion: SlashSuggestion): void {
+    this.applySlashSuggestion(suggestion);
+  }
+
+  isSlashActive(item: SlashSuggestion): boolean {
+    const active = this.slashMatches[this.slashIndex];
+    return Boolean(active && active.kind === item.kind && active.id === item.id);
+  }
+
+  private applySlashSuggestion(suggestion: SlashSuggestion): void {
+    this.draft = `/${suggestion.slashName} `;
+    this.closeSlashMenu();
+    this.composer?.nativeElement.focus();
+  }
+
+  private closeSlashMenu(): void {
+    this.slashOpen = false;
+    this.slashMatches = [];
+  }
+
+  private moveSlashSelection(delta: number): void {
+    if (!this.slashMatches.length) return;
+    const next = this.slashIndex + delta;
+    this.slashIndex =
+      (next + this.slashMatches.length) % this.slashMatches.length;
+  }
+
+  private refreshSlashMatches(): void {
+    const catalog = this.catalog;
+    if (!catalog) {
+      this.slashMatches = [];
+      return;
+    }
+    const query = this.slashQuery.trim().toLowerCase();
+    const matches: SlashSuggestion[] = [];
+    for (const command of catalog.commands) {
+      if (!command.enabled || !command.user_invocable) continue;
+      matches.push({
+        kind: 'command',
+        id: command.id,
+        slashName: command.id,
+        name: command.name,
+        description: command.description,
+        argumentHint: command.argument_hint,
+        score: this.slashScore(query, command.id, command.name, command.description),
+      });
+    }
+    for (const skill of catalog.skills) {
+      if (!skill.enabled || !skill.user_invocable) continue;
+      matches.push({
+        kind: 'skill',
+        id: skill.id,
+        slashName: skill.id,
+        name: skill.name,
+        description: skill.description,
+        argumentHint: null,
+        score: this.slashScore(query, skill.id, skill.name, skill.description),
+      });
+    }
+    this.slashMatches = matches
+      .filter((item) => item.score < 100)
+      .sort((left, right) => left.score - right.score)
+      .slice(0, 8);
+    if (this.slashIndex >= this.slashMatches.length) {
+      this.slashIndex = 0;
+    }
+  }
+
+  private slashScore(
+    query: string,
+    id: string,
+    name: string,
+    description: string,
+  ): number {
+    if (!query) return 10;
+    const values = [id, name].map((value) => value.toLowerCase());
+    if (values.includes(query)) return 0;
+    if (values.some((value) => value.startsWith(query))) return 1;
+    if (values.some((value) => value.includes(query))) return 2;
+    if (description.toLowerCase().includes(query)) return 3;
+    return 100;
+  }
+
+  /** Loads the extension catalog used for the slash-command menu. */
+  private async ensureCatalog(): Promise<void> {
+    if (this.catalog) return;
+    if (this.catalogRequest) return this.catalogRequest;
+    const request = (async () => {
+      try {
+        const response = await fetch(`${API_BASE}/catalog`);
+        if (!response.ok) return;
+        const payload = (await response.json()) as CapabilityCatalog;
+        this.catalog = payload;
+        if (this.slashOpen) this.refreshSlashMatches();
+        this.cdr.markForCheck();
+      } catch {
+        // The menu simply stays empty; the backend may not be up yet.
+      } finally {
+        this.catalogRequest = undefined;
+      }
+    })();
+    this.catalogRequest = request;
+    return request;
   }
 
   /**
@@ -238,6 +401,14 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
 
   focusComposer(): void {
     this.composer?.nativeElement.focus();
+  }
+
+  /** Fills the composer (used by the capability dialog's "insert" action). */
+  insertDraft(text: string): void {
+    this.draft = text;
+    this.onDraftInput();
+    this.focusComposer();
+    this.cdr.markForCheck();
   }
 
   private openStream(): void {

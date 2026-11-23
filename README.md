@@ -67,6 +67,7 @@ HTTP 接口：
 | GET | `/sessions/export` | 导出全部会话（Markdown） |
 | GET | `/sessions/{id}/transcript` | 会话的完整结构化转写（轮次 / 思考 / 工具调用 / 结论） |
 | GET | `/sessions/{id}/transcript/stream` | 同上，但以 SSE 推送，转写变化即下发 |
+| GET | `/catalog` | 扩展清单：`.stock` 下的 agent / 技能 / 命令 / MCP / hook |
 
 WebSocket 必须带 `session=<id>`；未知或已删除的会话会以关闭码 `4404` / `4001` 结束，缺少会话 ID 返回 `4400`。
 
@@ -101,7 +102,9 @@ enabled: true
 
 扩展在**每次新建终端连接时**重新扫描；修改文件后，刷新页面或点“重连”即可生效。
 
-> 注意：终端模式下，`/` 开头的内容由 CLI 自己的命令系统处理；`.stock/commands` 不会自动注册成 CLI 的斜杠命令。需要这些命令时，直接在对话中描述任务，模型会按系统提示读取对应技能/命令说明。
+`.stock/skills` 与 `.stock/commands` 都会被 CLI 注册成真正的斜杠命令（`/stock-analysis`、`/stock-report` 等），结构化视图的输入框和原始终端里都能直接用。输入 `/` 会弹出补全菜单。
+
+> ⚠️ CLI 通过 ripgrep 查找 `.stock/commands` 和 `.stock/agents`，而本仓库是源码快照，**没有内置 ripgrep 二进制**。因此 `terminal/wiring.ts` 会强制注入 `STOCK_USE_NATIVE_FILE_SEARCH=1`，让 CLI 改用 Node 原生文件遍历。去掉这个变量会导致命令和 agent **静默加载为 0**（技能不受影响，因为技能目录用的是另一套遍历逻辑）。
 
 ## 🚀 快速启动
 
