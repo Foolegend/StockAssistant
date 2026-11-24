@@ -480,11 +480,6 @@ app-transcript,
   background: #273449;
 }
 
-.topbar-mode {
-  color: #5b6b7c;
-  font-size: 13px;
-}
-
 .conversation-panel {
   display: flex;
   flex: 1;
