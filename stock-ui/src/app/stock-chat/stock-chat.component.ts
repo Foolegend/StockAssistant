@@ -894,11 +894,19 @@ export class StockChatComponent implements OnDestroy {
         if (!response.ok) {
           throw new Error(await this.readError(response));
         }
-        const payload = (await response.json()) as { data?: CapabilityCatalog };
-        if (!payload.data || !Array.isArray(payload.data.commands)) {
+        const payload = (await response.json()) as
+          | CapabilityCatalog
+          | { data?: CapabilityCatalog };
+        // The terminal server answers with the bare catalog; older builds
+        // wrapped it in `{ data }`, so accept both shapes.
+        const catalog =
+          payload && typeof payload === 'object' && 'commands' in payload
+            ? (payload as CapabilityCatalog)
+            : (payload as { data?: CapabilityCatalog })?.data;
+        if (!catalog || !Array.isArray(catalog.commands)) {
           throw new Error('能力目录数据无效');
         }
-        this.catalog = payload.data;
+        this.catalog = catalog;
       } catch (error: unknown) {
         this.catalogError =
           error instanceof Error ? error.message : '能力目录加载失败';

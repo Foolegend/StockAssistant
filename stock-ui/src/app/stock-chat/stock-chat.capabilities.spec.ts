@@ -74,8 +74,8 @@ describe('StockChatComponent capabilities', () => {
 
     spyOn(window, 'fetch').and.callFake(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/agent/catalog')) {
-        return new Response(JSON.stringify({ code: 0, data: catalog }), {
+      if (url.includes('/catalog')) {
+        return new Response(JSON.stringify(catalog), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -92,20 +92,14 @@ describe('StockChatComponent capabilities', () => {
   });
 
   it('loads the catalog lazily when the capabilities dialog opens', async () => {
-    const callsBefore = (window.fetch as jasmine.Spy).calls
-      .allArgs()
-      .filter((args) => String(args[0]).includes('/agent/catalog'));
-    expect(callsBefore.length).toBe(0);
-
     await (
       component as unknown as { ensureCatalog: () => Promise<void> }
     ).ensureCatalog();
     fixture.detectChanges();
 
-    const callsAfter = (window.fetch as jasmine.Spy).calls
-      .allArgs()
-      .filter((args) => String(args[0]).includes('/agent/catalog'));
-    expect(callsAfter.length).toBe(1);
+    // The terminal server answers with the bare catalog, not `{ data }`.
+    expect(component.catalog).toEqual(catalog);
+    expect(component.catalogError).toBeNull();
     expect(component.capabilityCount).toBe(4);
 
     component.openCapabilities();
