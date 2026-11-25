@@ -61,6 +61,7 @@ HTTP 接口：
 | GET | `/health` | 健康检查 |
 | GET | `/sessions` | 会话列表（按最后活动时间倒序） |
 | POST | `/sessions` | 新建会话并启动 CLI |
+| PATCH | `/sessions/{id}` | 重命名会话（请求体 `{"title": "..."}`） |
 | DELETE | `/sessions/{id}` | 删除会话并终止 CLI |
 | DELETE | `/sessions` | 删除全部会话 |
 | GET | `/sessions/{id}/output` | 导出该会话终端输出（纯文本） |
@@ -68,6 +69,10 @@ HTTP 接口：
 | GET | `/sessions/{id}/transcript` | 会话的完整结构化转写（轮次 / 思考 / 工具调用 / 结论） |
 | GET | `/sessions/{id}/transcript/stream` | 同上，但以 SSE 推送，转写变化即下发 |
 | GET | `/catalog` | 扩展清单：`.stock` 下的 agent / 技能 / 命令 / MCP / hook |
+| GET | `/agent/preferences` | 长期偏好列表 |
+| POST | `/agent/preferences` | 新增偏好（`content`、`category`） |
+| PATCH | `/agent/preferences/{id}` | 修改内容、分类或启用状态 |
+| DELETE | `/agent/preferences/{id}` | 删除偏好 |
 
 WebSocket 必须带 `session=<id>`；未知或已删除的会话会以关闭码 `4404` / `4001` 结束，缺少会话 ID 返回 `4400`。
 
@@ -223,4 +228,5 @@ python -m venv .venv
 - `.stock` 的斜杠命令不会注册为 CLI 原生命令；技能通过系统提示 + 按需读取 `SKILL.md` 生效。
 - `.stock` 中的技能脚本使用仓库根目录的 `.venv`（终端会把 `.venv` 加入 CLI 子进程 `PATH`）；MCP server（`quant_tools_server.py`）为纯标准库实现。
 - 分析引擎需要一个兼容 Anthropic Messages API 的端点；模型是否输出 `thinking` 取决于模型本身。
-- 原聊天页 `/chat` 的 `/agent/*` 接口已随 `server/` 删除，页面仅作历史参考。
+- 长期偏好在会话创建（CLI 启动）时注入系统提示词；修改偏好后，已运行的会话需新建会话才会应用。
+- 原聊天页 `/chat` 的 `/agent/chat/*` 等接口已随 `server/` 删除，页面仅作历史参考；当前仅保留 `/agent/preferences` 用于长期偏好管理。

@@ -18,6 +18,10 @@
  *   GET    /sessions/:id/output
  *   GET    /sessions/:id/transcript
  *   GET    /sessions/:id/transcript/stream   (SSE, live transcript)
+ *   GET    /agent/preferences
+ *   POST   /agent/preferences
+ *   PATCH  /agent/preferences/:id
+ *   DELETE /agent/preferences/:id
  *
  * WebSocket:
  *   /terminal/ws?session=<id>&cols=<n>&rows=<n>
@@ -28,6 +32,7 @@
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { loadStockExtensions } from '../lib/catalog';
+import { PreferenceStore, type Preference } from './preferences';
 import { SessionStore } from './store';
 import {
   clearTranscriptCache,
@@ -111,9 +116,12 @@ interface SocketData {
 
 const sessions = new Map<string, Session>();
 const store = new SessionStore(dbPath);
+const preferenceStore = new PreferenceStore(dbPath);
 const MAX_BUFFER = 200_000;
 /** Upper bound for a manually entered session title. */
 const MAX_TITLE_LENGTH = 80;
+/** Upper bound for a stored long-term preference. */
+const MAX_PREFERENCE_LENGTH = 500;
 let shuttingDown = false;
 
 /**
@@ -144,6 +152,21 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** Parses a JSON object body, or returns null when it is invalid. */
+async function readJsonBody(
+  request: Request,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const parsed: unknown = await request.json();
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Not JSON.
+  }
+  return null;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -158,6 +181,22 @@ function defaultTitle(): string {
   const mm = String(now.getMinutes()).padStart(2, '0');
   const ss = String(now.getSeconds()).padStart(2, '0');
   return `终端会话 ${hh}:${mm}:${ss}`;
+}
+
+const PREFERENCE_CATEGORY_LABELS: Record<string, string> = {
+  market: '市场',
+  investment: '投资',
+  style: '风格',
+  profile: '个人',
+  general: '其他',
+};
+
+/** Formats stored preferences as prompt lines for the CLI. */
+function preferencePromptLines(items: Preference[]): string[] {
+  return items.map((item) => {
+    const label = PREFERENCE_CATEGORY_LABELS[item.category] ?? item.category;
+    return `[${label}] ${item.content}`;
+  });
 }
 
 /**
@@ -274,7 +313,13 @@ function spawnCli(session: Session, resume: boolean): void {
     stockRoot,
     extensions.catalog,
     extensions.agentBodies,
-    { sessionId: session.id, resume },
+    {
+      sessionId: session.id,
+      resume,
+      // Preferences are read once per CLI start; a new session picks up the
+      // latest set, a running one keeps the prompt it was started with.
+      preferences: preferencePromptLines(preferenceStore.listEnabled()),
+    },
   );
 
   const decoder = new TextDecoder();
@@ -546,6 +591,7 @@ function shutdown(): void {
   try {
     flushAll();
     store.close();
+    preferenceStore.close();
   } catch {
     // Best effort on shutdown.
   }
@@ -576,6 +622,63 @@ const server = Bun.serve<SocketData>({
     if (method === 'GET' && url.pathname === '/catalog') {
       const extensions = loadStockExtensions(repoRoot);
       return json(extensions.catalog);
+    }
+
+    if (url.pathname === '/agent/preferences') {
+      if (method === 'GET') {
+        return json({ data: { preferences: preferenceStore.list() } });
+      }
+      if (method === 'POST') {
+        const body = await readJsonBody(request);
+        if (!body) return json({ detail: '请求体不是有效的 JSON' }, 400);
+        const content =
+          typeof body['content'] === 'string' ? body['content'].trim() : '';
+        if (!content) return json({ detail: '偏好内容不能为空' }, 400);
+        const category =
+          typeof body['category'] === 'string' && body['category'].trim()
+            ? body['category'].trim().slice(0, 40)
+            : 'general';
+        const preference = preferenceStore.create({
+          content: content.slice(0, MAX_PREFERENCE_LENGTH),
+          category,
+        });
+        return json({ data: { preference } }, 201);
+      }
+      return json({ detail: '不支持的请求方法' }, 405);
+    }
+
+    const preferenceMatch = /^\/agent\/preferences\/(\d+)$/.exec(url.pathname);
+    if (preferenceMatch) {
+      const id = Number(preferenceMatch[1]);
+      if (method === 'PATCH') {
+        const body = await readJsonBody(request);
+        if (!body) return json({ detail: '请求体不是有效的 JSON' }, 400);
+        const changes: {
+          content?: string;
+          category?: string;
+          enabled?: boolean;
+        } = {};
+        if (typeof body['content'] === 'string') {
+          const content = body['content'].trim();
+          if (!content) return json({ detail: '偏好内容不能为空' }, 400);
+          changes.content = content.slice(0, MAX_PREFERENCE_LENGTH);
+        }
+        if (typeof body['category'] === 'string' && body['category'].trim()) {
+          changes.category = body['category'].trim().slice(0, 40);
+        }
+        if (typeof body['enabled'] === 'boolean') {
+          changes.enabled = body['enabled'];
+        }
+        const preference = preferenceStore.update(id, changes);
+        if (!preference) return json({ detail: '偏好不存在' }, 404);
+        return json({ data: { preference } });
+      }
+      if (method === 'DELETE') {
+        return preferenceStore.delete(id)
+          ? json({ data: { ok: true } })
+          : json({ detail: '偏好不存在' }, 404);
+      }
+      return json({ detail: '不支持的请求方法' }, 405);
     }
 
     if (method === 'GET' && url.pathname === '/sessions') {
@@ -641,13 +744,9 @@ const server = Bun.serve<SocketData>({
       const id = decodeURIComponent(sessionMatch[1]);
       const session = sessions.get(id);
       if (!session) return json({ detail: '会话不存在' }, 404);
-      let body: unknown;
-      try {
-        body = await request.json();
-      } catch {
-        return json({ detail: '请求体不是有效的 JSON' }, 400);
-      }
-      const rawTitle = (body as { title?: unknown } | null)?.title;
+      const body = await readJsonBody(request);
+      if (!body) return json({ detail: '请求体不是有效的 JSON' }, 400);
+      const rawTitle = body['title'];
       const title = typeof rawTitle === 'string' ? rawTitle.trim() : '';
       if (!title) return json({ detail: '会话名称不能为空' }, 400);
       renameSession(session, title.slice(0, MAX_TITLE_LENGTH));

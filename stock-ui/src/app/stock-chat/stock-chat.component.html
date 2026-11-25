@@ -125,9 +125,9 @@
       <button
         class="preferences-button"
         type="button"
-        disabled
-        title="终端模式下暂不支持长期偏好"
-        aria-label="终端模式下暂不支持长期偏好"
+        (click)="openPreferences()"
+        title="查看和管理长期偏好"
+        aria-label="查看和管理长期偏好"
         >
         <span aria-hidden="true">◎</span>
         <span>长期偏好</span>
@@ -196,7 +196,7 @@
         <header class="modal-header">
           <div>
             <h2>长期偏好</h2>
-            <p>跨会话生效，会注入到每次对话的上下文中。可手动添加，也会从对话中自动提取。</p>
+            <p>跨会话生效：新建会话时注入到系统提示词中，已在运行的会话需新建后才会应用。可手动添加、修改或停用。</p>
           </div>
           <button
             class="modal-close"
@@ -286,7 +286,7 @@
             }
             @if (!preferences.length && !preferencesLoading) {
               <p class="modal-empty">
-                还没有记录长期偏好。你可以在对话中直接说“记住我只做 A 股”，或者在上方手动添加。
+                还没有记录长期偏好。可以在上方按分类手动添加，例如“只关注 A 股”。
               </p>
             }
           </div>

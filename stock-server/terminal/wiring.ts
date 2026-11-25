@@ -22,6 +22,8 @@ export interface TerminalLaunchOptions {
   sessionId?: string;
   /** Resume an existing CLI session instead of creating a new one. */
   resume?: boolean;
+  /** Enabled long-term preferences, injected into the system prompt. */
+  preferences?: string[];
 }
 
 export function loadDotEnv(file: string): Record<string, string> {
@@ -86,7 +88,7 @@ export function buildTerminalLaunch(
     '--mcp-config',
     buildMcpConfig(repoRoot),
     '--append-system-prompt',
-    buildSystemAppend(catalog, agentBodies, repoRoot),
+    buildSystemAppend(catalog, agentBodies, repoRoot, options.preferences ?? []),
     '--add-dir',
     repoRoot,
   ];
@@ -109,6 +111,7 @@ function buildSystemAppend(
   catalog: CapabilityCatalog,
   agentBodies: Map<string, string>,
   repoRoot: string,
+  preferences: string[] = [],
 ): string {
   const agent =
     catalog.agents.find((item) => item.enabled) ?? catalog.agents[0] ?? null;
@@ -147,6 +150,14 @@ function buildSystemAppend(
             .trim()
             .slice(0, 160)}`,
       ),
+    );
+  }
+
+  if (preferences.length > 0) {
+    lines.push(
+      '## 用户长期偏好',
+      '以下偏好由用户设置，请在分析与回答中始终遵守：',
+      ...preferences.map((preference) => `- ${preference}`),
     );
   }
 
