@@ -28,6 +28,17 @@ function Resolve-BunExe {
 
 $bun = Resolve-BunExe
 if (-not $bun) {
+    # 未检测到 Bun：尝试用 npm 自动安装（npm 自带 bun 包，会下载对应平台的二进制）
+    $npm = Get-Command npm -ErrorAction SilentlyContinue
+    if ($npm) {
+        Write-Host '⚠️  未检测到 Bun，正在通过 npm 自动安装 ...' -ForegroundColor Yellow
+        & npm install -g bun
+        if ($LASTEXITCODE -eq 0) {
+            $bun = Resolve-BunExe
+        }
+    }
+}
+if (-not $bun) {
     Write-Host '❌ 未找到 Bun，请先安装：https://bun.sh' -ForegroundColor Red
     exit 1
 }

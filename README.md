@@ -111,9 +111,11 @@ enabled: true
 ### 前置条件
 
 - **Bun 1.4+**（后端运行时）：<https://bun.sh>
+  —— 未安装也没关系：Linux / macOS 的 `start_server.sh` 会自动把 Bun 下载安装到 `~/.bun`（免 root，国内走 npmmirror 镜像），Windows 的 `start_server.ps1` 会用 `npm install -g bun` 自动安装。
 - **Node.js LTS + npm**（前端构建）
+  —— Angular CLI 对 Node 有最低版本要求（见 `@angular/cli` 的 `engines.node`）。版本过低时 `start_ui.sh` 会自动下载一个兼容版本到 `~/.local/share/stockassistant-node` 并优先使用它，无需手动升级。
 - **Python 3.12+**（可选：行情抓取与文档处理技能脚本）
-- 首次安装依赖：
+- 首次安装依赖（启动脚本会自动执行，也可手动）：
 
   ```bash
   cd stock-server && bun install

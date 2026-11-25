@@ -11,6 +11,46 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+# 2.1 检查 Node 版本是否满足 Angular CLI 的要求（engines.node）
+function Get-AngularNodeRequirement {
+    $pkg = Join-Path $FRONT_ROOT 'node_modules\@angular\cli\package.json'
+    if (-not (Test-Path $pkg)) { return $null }
+    try {
+        $json = Get-Content $pkg -Raw | ConvertFrom-Json
+        if ($json.engines -and $json.engines.node) { return $json.engines.node }
+    }
+    catch { }
+    return $null
+}
+
+function Test-NodeCompatible {
+    param([string]$Version, [string]$Requirement)
+    if (-not $Requirement) { return $true }
+    try { $current = [version]$Version.TrimStart('v') } catch { return $true }
+    foreach ($part in ($Requirement -split '\|\|')) {
+        $p = $part.Trim()
+        if ($p.StartsWith('^')) {
+            $min = [version]$p.Substring(1)
+            if ($current.Major -eq $min.Major -and $current -ge $min) { return $true }
+        }
+        elseif ($p.StartsWith('>=')) {
+            $min = [version]$p.Substring(2)
+            if ($current -ge $min) { return $true }
+        }
+    }
+    return $false
+}
+
+$nodeRequirement = Get-AngularNodeRequirement
+if ($nodeRequirement) {
+    $nodeVersion = (& node -v) -replace '^v', ''
+    if (-not (Test-NodeCompatible -Version $nodeVersion -Requirement $nodeRequirement)) {
+        Write-Host "❌ 当前 Node.js 版本 v$nodeVersion 不满足 Angular CLI 要求（需要 $nodeRequirement）" -ForegroundColor Red
+        Write-Host "   请升级 Node.js 后重试：https://nodejs.org/ （或 winget install OpenJS.NodeJS.LTS）" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
 # 3. 检查并安装/同步依赖
 #    - node_modules 不存在：全新安装（有 lock 文件时用 npm ci 保证一致）
 #    - package.json / package-lock.json 比 node_modules 中的记录更新：增量同步
