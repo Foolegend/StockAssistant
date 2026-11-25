@@ -11,6 +11,8 @@ $ROOT = $PSScriptRoot
 $InitialLocation = (Get-Location).Path
 $ServerHost = "127.0.0.1"
 $ServerPort = 8015
+# 首次运行可能需要自动安装 Bun + 安装依赖，放宽等待时间到 5 分钟
+$WaitSeconds = 300
 $serverProc = $null
 
 function Stop-Backend {
@@ -20,7 +22,7 @@ function Stop-Backend {
     if (-not $proc.HasExited) {
         Write-Host ""
         Write-Host "🛑 正在停止后端服务 (PID: $($proc.Id))..." -ForegroundColor Yellow
-        # /T 一并结束 uvicorn 子进程，/F 强制结束
+        # /T 一并结束后端及其 CLI 子进程，/F 强制结束
         & taskkill /PID $proc.Id /T /F *> $null
         Start-Sleep -Milliseconds 500
     }
@@ -66,7 +68,7 @@ try {
 
     Write-Host "⏳ 等待后端监听 ${ServerHost}:$ServerPort ..." -ForegroundColor Gray
     $ready = $false
-    for ($i = 0; $i -lt 60; $i++) {
+    for ($i = 0; $i -lt $WaitSeconds; $i++) {
         if ($serverProc.HasExited) {
             throw "后端启动失败（退出码 $($serverProc.ExitCode)），请查看上方日志"
         }
@@ -74,10 +76,13 @@ try {
             $ready = $true
             break
         }
+        if ($i -gt 0 -and $i % 30 -eq 0) {
+            Write-Host "   …仍在等待（${i}s / ${WaitSeconds}s），首次启动可能在安装 Bun 与依赖" -ForegroundColor DarkGray
+        }
         Start-Sleep -Seconds 1
     }
     if (-not $ready) {
-        throw "等待后端启动超时（60s）"
+        throw "等待后端启动超时（${WaitSeconds}s）"
     }
     Write-Host "✅ 后端已就绪" -ForegroundColor Green
 

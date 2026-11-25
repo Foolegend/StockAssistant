@@ -23,7 +23,8 @@ SERVER_PID=$!
 
 echo "⏳ 等待后端监听 127.0.0.1:$SERVER_PORT ..."
 # 首次运行可能需要自动安装 Bun + 安装依赖，放宽等待时间到 5 分钟
-for i in $(seq 1 300); do
+WAIT_SECONDS=300
+for i in $(seq 1 "$WAIT_SECONDS"); do
     if (exec 3<>"/dev/tcp/127.0.0.1/$SERVER_PORT") 2>/dev/null; then
         echo "✅ 后端已就绪"
         break
@@ -35,13 +36,13 @@ for i in $(seq 1 300); do
         exit 1
     fi
     if (( i % 30 == 0 )); then
-        echo "   …仍在等待（${i}s / 300s），首次启动可能在安装 Bun 与依赖"
+        echo "   …仍在等待（${i}s / ${WAIT_SECONDS}s），首次启动可能在安装 Bun 与依赖"
     fi
     sleep 1
 done
 
 if ! (exec 3<>"/dev/tcp/127.0.0.1/$SERVER_PORT") 2>/dev/null; then
-    echo "❌ 等待后端启动超时（60s）" >&2
+    echo "❌ 等待后端启动超时（${WAIT_SECONDS}s）" >&2
     exit 1
 fi
 
