@@ -32,16 +32,41 @@
             (dragend)="onDragEnd()"
             >
             <span class="conversation-drag" title="拖动调整顺序" aria-hidden="true">⠿</span>
-            <button
-              class="conversation-link"
-              type="button"
-              [disabled]="isLoading"
-              (click)="openConversation(conversation)"
-              [title]="conversation.title"
-              >
-              <span class="conversation-glyph" aria-hidden="true">◌</span>
-              <span class="conversation-title">{{ conversation.title }}</span>
-            </button>
+            @if (renamingThreadId === conversation.threadId) {
+              <input
+                #renameInput
+                class="conversation-rename-input"
+                type="text"
+                maxlength="80"
+                [(ngModel)]="renameDraft"
+                (keydown.enter)="commitRename(conversation)"
+                (keydown.escape)="cancelRename()"
+                (blur)="commitRename(conversation)"
+                (dragstart)="$event.preventDefault(); $event.stopPropagation()"
+                [attr.aria-label]="'重命名会话：' + conversation.title"
+              />
+            } @else {
+              <button
+                class="conversation-link"
+                type="button"
+                [disabled]="isLoading"
+                (click)="openConversation(conversation)"
+                (dblclick)="startRename(conversation, $event)"
+                [title]="conversation.title + '（双击重命名）'"
+                >
+                <span class="conversation-glyph" aria-hidden="true">◌</span>
+                <span class="conversation-title">{{ conversation.title }}</span>
+              </button>
+              <button
+                class="conversation-rename"
+                type="button"
+                (click)="startRename(conversation, $event)"
+                [attr.aria-label]="'重命名会话：' + conversation.title"
+                title="重命名会话"
+                >
+                <span aria-hidden="true">✎</span>
+              </button>
+            }
             <button
               class="conversation-export"
               type="button"
@@ -150,7 +175,11 @@
           <app-terminal class="embedded-terminal" [sessionId]="activeSessionId" />
         </div>
       } @else {
-        <app-transcript class="transcript-column" [sessionId]="activeSessionId" />
+        <app-transcript
+          class="transcript-column"
+          [sessionId]="activeSessionId"
+          (firstPrompt)="onFirstPrompt($event)"
+        />
       }
     </div>
   </main>

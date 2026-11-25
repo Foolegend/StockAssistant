@@ -158,6 +158,9 @@ const TOOL_TARGET_KEYS = [
   'url',
 ];
 
+/** Titles the server generates before a session gets a real name. */
+const DEFAULT_SESSION_TITLE_PREFIX = '终端会话 ';
+
 @Component({
   selector: 'app-stock-chat',
   imports: [
@@ -204,6 +207,9 @@ export class StockChatComponent implements OnDestroy {
   exportingConversationId: string | null = null;
   draggedThreadId: string | null = null;
   dragOverThreadId: string | null = null;
+  /** Session whose sidebar title is being edited inline. */
+  renamingThreadId: string | null = null;
+  renameDraft = '';
 
   preferences: UserPreference[] = [];
   preferencesOpen = false;
@@ -227,9 +233,13 @@ export class StockChatComponent implements OnDestroy {
   @ViewChild(TranscriptComponent)
   private transcript?: TranscriptComponent;
 
+  @ViewChild('renameInput')
+  private renameInput?: ElementRef<HTMLInputElement>;
+
   private catalogRequest?: Promise<void>;
   private abortController?: AbortController;
   private activeRunId?: string;
+  private renameSaving = false;
   private readonly storageKey = 'stock-assistant-conversations-v1';
   private readonly orderKey = 'stock-assistant-conversation-order-v1';
   /** Conversations whose full message history is cached locally. */
@@ -460,6 +470,107 @@ export class StockChatComponent implements OnDestroy {
     } finally {
       this.sessionsLoading = false;
       this.cdr.markForCheck();
+    }
+  }
+
+  /**
+   * Names a session after its first question as soon as the transcript shows
+   * it, instead of waiting for the periodic session poll to pick up the rename.
+   */
+  onFirstPrompt(prompt: string): void {
+    const id = this.activeSessionId;
+    if (!id) {
+      return;
+    }
+    const target =
+      this.conversations.find((item) => item.threadId === id) ??
+      (this.currentConversation.threadId === id
+        ? this.currentConversation
+        : undefined);
+    if (!target) {
+      return;
+    }
+    // A name the user chose must survive the automatic naming.
+    if (!target.title.startsWith(DEFAULT_SESSION_TITLE_PREFIX)) {
+      return;
+    }
+    const title = prompt.length > 28 ? `${prompt.slice(0, 28)}…` : prompt;
+    this.applySessionTitle(id, title);
+    this.cdr.markForCheck();
+  }
+
+  /** Opens the inline editor for a session's sidebar title. */
+  startRename(conversation: ChatConversation, event?: Event): void {
+    event?.stopPropagation();
+    if (this.renamingThreadId === conversation.threadId) {
+      return;
+    }
+    this.renamingThreadId = conversation.threadId;
+    this.renameDraft = conversation.title;
+    this.cdr.markForCheck();
+    // The input only exists after the next change-detection pass.
+    window.setTimeout(() => {
+      this.renameInput?.nativeElement.focus();
+      this.renameInput?.nativeElement.select();
+    }, 0);
+  }
+
+  cancelRename(): void {
+    this.renamingThreadId = null;
+    this.renameDraft = '';
+    this.cdr.markForCheck();
+  }
+
+  async commitRename(conversation: ChatConversation): Promise<void> {
+    if (this.renamingThreadId !== conversation.threadId || this.renameSaving) {
+      return;
+    }
+    const threadId = conversation.threadId;
+    const previous = conversation.title;
+    const title = this.renameDraft.trim().slice(0, 80);
+    // Close the editor first: Enter also fires blur.
+    this.renamingThreadId = null;
+    this.renameDraft = '';
+    this.cdr.markForCheck();
+    if (!title || title === previous) {
+      return;
+    }
+
+    this.renameSaving = true;
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/sessions/${encodeURIComponent(threadId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await this.readError(response));
+      }
+      const body = (await response.json()) as {
+        session?: TerminalSessionSummary;
+      };
+      this.applySessionTitle(threadId, body.session?.title ?? title);
+      this.apiError = null;
+    } catch (error: unknown) {
+      this.apiError =
+        error instanceof Error ? error.message : '会话重命名失败';
+    } finally {
+      this.renameSaving = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  private applySessionTitle(threadId: string, title: string): void {
+    for (const conversation of this.conversations) {
+      if (conversation.threadId === threadId) {
+        conversation.title = title;
+      }
+    }
+    if (this.currentConversation.threadId === threadId) {
+      this.currentConversation.title = title;
     }
   }
 

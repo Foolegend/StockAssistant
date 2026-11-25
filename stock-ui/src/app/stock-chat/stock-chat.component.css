@@ -182,6 +182,7 @@ app-stock-chat {
 }
 
 .conversation-export,
+.conversation-rename,
 .conversation-delete {
   display: grid;
   flex: 0 0 auto;
@@ -206,20 +207,43 @@ app-stock-chat {
 }
 
 .conversation-item:hover .conversation-export,
+.conversation-item:hover .conversation-rename,
 .conversation-item:hover .conversation-delete,
 .conversation-export:focus-visible,
+.conversation-rename:focus-visible,
 .conversation-delete:focus-visible {
   opacity: 1;
 }
 
-.conversation-export:hover:not(:disabled) {
+.conversation-export:hover:not(:disabled),
+.conversation-rename:hover:not(:disabled) {
   color: #c7dcf5;
   background: rgba(120, 165, 220, 0.2);
+}
+
+.conversation-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 27px;
+  margin: 0 4px;
+  padding: 0 8px;
+  border: 1px solid #4f7ea8;
+  border-radius: 5px;
+  color: #eef4fb;
+  background: rgba(10, 24, 38, 0.92);
+  font: inherit;
+  font-size: 12px;
+}
+
+.conversation-rename-input:focus {
+  outline: 2px solid rgba(127, 185, 214, 0.45);
+  outline-offset: 0;
 }
 
 /* Touch devices have no hover state, so the action buttons stay visible. */
 @media (hover: none) {
   .conversation-export,
+  .conversation-rename,
   .conversation-delete {
     opacity: 1;
   }

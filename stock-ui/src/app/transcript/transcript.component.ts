@@ -3,9 +3,11 @@ import {
   ChangeDetectorRef,
   Component,
   ElementRef,
+  EventEmitter,
   Input,
   OnChanges,
   OnDestroy,
+  Output,
   SimpleChanges,
   ViewChild,
 } from '@angular/core';
@@ -48,6 +50,8 @@ interface TranscriptPayload {
   turns: TranscriptTurn[];
   updated_at: string | null;
   running: boolean;
+  /** True once the CLI has mounted its prompt and reads stdin. */
+  ready?: boolean;
 }
 
 /** Human-readable names for the tools the CLI may call. */
@@ -96,6 +100,8 @@ const TOOL_TARGET_KEYS = [
 })
 export class TranscriptComponent implements OnChanges, OnDestroy {
   @Input() sessionId: string | null = null;
+  /** Emits the first prompt so the sidebar can name the session at once. */
+  @Output() firstPrompt = new EventEmitter<string>();
 
   @ViewChild('scroller') private scroller?: ElementRef<HTMLElement>;
   @ViewChild('composer') private composer?: ElementRef<HTMLTextAreaElement>;
@@ -103,6 +109,8 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   turns: TranscriptTurn[] = [];
   running = false;
   connected = false;
+  /** False while the CLI is still starting up. */
+  ready = true;
   sending = false;
   /** Process steps start folded; only the final answer is always visible. */
   allCollapsed = true;
@@ -117,6 +125,10 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
 
   private source?: EventSource;
   private socket?: WebSocket;
+  /** Session the open socket is attached to; it must match before reuse. */
+  private socketSessionId?: string;
+  /** Session whose first prompt has already been announced to the parent. */
+  private namedSessionId?: string;
   private disposed = false;
   private catalog: CapabilityCatalog | null = null;
   private catalogRequest?: Promise<void>;
@@ -141,14 +153,19 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
     if (!this.sessionId) return '未选择会话';
     if (!this.connected) return '正在连接…';
     if (this.running) return '分析中…';
+    if (!this.ready) return 'CLI 启动中…';
     return this.turns.length ? '已更新' : '等待输入';
   }
 
   restart(): void {
     this.closeStream();
+    // The socket is bound to the old session; reusing it would send the next
+    // question to the previous session's CLI.
+    this.closeSocket();
     this.turns = [];
     this.running = false;
     this.error = null;
+    this.namedSessionId = undefined;
     this.cdr.markForCheck();
     if (!this.sessionId) return;
     this.openStream();
@@ -374,13 +391,18 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
     this.error = null;
     try {
       await this.ensureSocket();
-      this.socket?.send(JSON.stringify({ type: 'input', data: text }));
+      const socket = this.socket;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        throw new Error('socket not open');
+      }
+      socket.send(JSON.stringify({ type: 'input', data: text }));
       // The CLI treats a burst of input as a paste, so let it settle before
       // the Enter that submits the prompt.
       await new Promise((resolve) => setTimeout(resolve, 220));
-      this.socket?.send(JSON.stringify({ type: 'input', data: '\r' }));
+      socket.send(JSON.stringify({ type: 'input', data: '\r' }));
       this.draft = '';
     } catch {
+      // Keep the draft so the question is not lost.
       this.error = '无法连接终端服务，请确认后端已启动';
     } finally {
       this.sending = false;
@@ -434,8 +456,14 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
         const payload = JSON.parse(event.data) as TranscriptPayload;
         this.turns = Array.isArray(payload.turns) ? payload.turns : [];
         this.running = payload.running === true;
+        this.ready = payload.ready !== false;
         this.connected = true;
         this.error = null;
+        const prompt = this.turns[0]?.prompt;
+        if (prompt && this.namedSessionId !== this.sessionId) {
+          this.namedSessionId = this.sessionId ?? undefined;
+          this.firstPrompt.emit(prompt);
+        }
         this.cdr.markForCheck();
         this.scrollToBottom();
       } catch {
@@ -462,11 +490,15 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   }
 
   private ensureSocket(): Promise<void> {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      return Promise.resolve();
-    }
     const id = this.sessionId;
     if (!id) return Promise.reject(new Error('no session'));
+    // Only reuse the socket when it belongs to the session being written to.
+    if (
+      this.socket?.readyState === WebSocket.OPEN &&
+      this.socketSessionId === id
+    ) {
+      return Promise.resolve();
+    }
     this.closeSocket();
 
     return new Promise<void>((resolve, reject) => {
@@ -482,10 +514,23 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
         )}&cols=120&rows=40&echo=0`,
       );
       this.socket = socket;
-      socket.onopen = () => resolve();
-      socket.onerror = () => reject(new Error('websocket error'));
+      this.socketSessionId = id;
+      // The promise must settle even when the socket closes before it opens,
+      // otherwise the composer waits forever and looks unresponsive.
+      let settled = false;
+      const settle = (action: () => void): void => {
+        if (settled) return;
+        settled = true;
+        action();
+      };
+      socket.onopen = () => settle(resolve);
+      socket.onerror = () => settle(() => reject(new Error('websocket error')));
       socket.onclose = () => {
-        if (this.socket === socket) this.socket = undefined;
+        settle(() => reject(new Error('websocket closed')));
+        if (this.socket === socket) {
+          this.socket = undefined;
+          this.socketSessionId = undefined;
+        }
       };
     });
   }
@@ -493,6 +538,7 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   private closeSocket(): void {
     const socket = this.socket;
     this.socket = undefined;
+    this.socketSessionId = undefined;
     try {
       socket?.close();
     } catch {

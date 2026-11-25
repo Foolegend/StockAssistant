@@ -12,6 +12,7 @@
  *   GET    /sessions
  *   POST   /sessions
  *   DELETE /sessions
+ *   PATCH  /sessions/:id                      (rename)
  *   DELETE /sessions/:id
  *   GET    /sessions/export
  *   GET    /sessions/:id/output
@@ -85,6 +86,19 @@ interface Session {
   alive: boolean;
   started: boolean;
   saveTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * True once the CLI has mounted its prompt and reads stdin.  Input that
+   * arrives earlier is swallowed by the CLI, so it is queued instead.
+   */
+  ready: boolean;
+  /** Tail of the CLI output, used to detect the ready marker. */
+  readyProbe: string;
+  /** Input received before the CLI was ready, replayed once it is. */
+  pendingInput: string[];
+  /** Timer that replays the queued input, one chunk at a time. */
+  flushTimer?: ReturnType<typeof setTimeout>;
+  /** Timer that gives up waiting for the ready marker. */
+  readyTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface SocketData {
@@ -98,11 +112,24 @@ interface SocketData {
 const sessions = new Map<string, Session>();
 const store = new SessionStore(dbPath);
 const MAX_BUFFER = 200_000;
+/** Upper bound for a manually entered session title. */
+const MAX_TITLE_LENGTH = 80;
 let shuttingDown = false;
+
+/**
+ * The CLI renders its input box with Ink, which turns on bracketed paste
+ * mode as soon as the prompt is mounted.  That marker is the earliest sign
+ * that the CLI actually reads stdin.
+ */
+const READY_MARKER = '\u001b[?2004h';
+/** How long queued input waits for the ready marker before it is sent anyway. */
+const READY_FALLBACK_MS = 15_000;
+/** Gap between two replayed input chunks, so a burst is not read as a paste. */
+const REPLAY_GAP_MS = 220;
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
@@ -164,7 +191,16 @@ function transcriptEventStream(sessionId: string): Response {
       const push = (): void => {
         try {
           const payload = readTranscript(sessionId);
-          const text = JSON.stringify(payload);
+          const session = sessions.get(sessionId);
+          // The structured view only uses this stream, so the rename that
+          // used to live on the polling endpoint must happen here too.
+          if (session) syncSessionTitle(session, payload);
+          const text = JSON.stringify({
+            ...payload,
+            // Whether the CLI has mounted its prompt and reads stdin yet.
+            ready: session?.ready ?? false,
+            alive: session?.alive ?? false,
+          });
           if (text === last) return;
           last = text;
           controller.enqueue(encoder.encode(`data: ${text}\n\n`));
@@ -243,12 +279,32 @@ function spawnCli(session: Session, resume: boolean): void {
 
   const decoder = new TextDecoder();
   session.decoder = decoder;
+  session.ready = false;
+  session.readyProbe = '';
+  session.pendingInput = [];
+  if (session.flushTimer) {
+    clearTimeout(session.flushTimer);
+    session.flushTimer = undefined;
+  }
+  if (session.readyTimer) {
+    clearTimeout(session.readyTimer);
+    session.readyTimer = undefined;
+  }
 
   const term = new TerminalCtor({
     cols: session.cols,
     rows: session.rows,
     data(_term, chunk) {
-      appendOutput(session, decoder.decode(chunk, { stream: true }));
+      const text = decoder.decode(chunk, { stream: true });
+      appendOutput(session, text);
+      if (!session.ready) {
+        // The marker can be split across two chunks, so keep a short tail.
+        session.readyProbe = (session.readyProbe + text).slice(-64);
+        if (session.readyProbe.includes(READY_MARKER)) {
+          session.ready = true;
+          flushPendingInput(session);
+        }
+      }
     },
     exit(_term, code) {
       session.alive = false;
@@ -292,6 +348,57 @@ function ensureLiveSession(session: Session): void {
   spawnCli(session, resume);
 }
 
+/**
+ * Replays the input that arrived while the CLI was still starting up.
+ *
+ * The chunks are written one at a time with a small gap: the CLI treats a
+ * burst of characters as a paste, and a paste must not swallow the Enter
+ * that submits the prompt.
+ */
+function flushPendingInput(session: Session): void {
+  if (session.flushTimer) return;
+  const chunk = session.pendingInput.shift();
+  if (chunk === undefined) return;
+  try {
+    session.term?.write(chunk);
+  } catch {
+    // The CLI may have exited.
+  }
+  if (session.pendingInput.length > 0) {
+    session.flushTimer = setTimeout(() => {
+      session.flushTimer = undefined;
+      flushPendingInput(session);
+    }, REPLAY_GAP_MS);
+  }
+}
+
+/**
+ * Sends input to the CLI, or queues it while the CLI is still booting.
+ *
+ * The CLI ignores everything that arrives before its prompt is mounted, so
+ * an early keystroke would disappear without a trace.
+ */
+function writeInput(session: Session, data: string): void {
+  if (!session.ready) {
+    session.pendingInput.push(data);
+    if (!session.readyTimer) {
+      session.readyTimer = setTimeout(() => {
+        session.readyTimer = undefined;
+        if (session.ready) return;
+        // The marker never showed up; send the input anyway.
+        session.ready = true;
+        flushPendingInput(session);
+      }, READY_FALLBACK_MS);
+    }
+    return;
+  }
+  try {
+    session.term?.write(data);
+  } catch {
+    // The CLI may have exited.
+  }
+}
+
 function createSession(cols: number, rows: number, title?: string): Session {
   const id = crypto.randomUUID();
   const timestamp = nowIso();
@@ -309,6 +416,9 @@ function createSession(cols: number, rows: number, title?: string): Session {
     sockets: new Set(),
     alive: false,
     started: true,
+    ready: false,
+    readyProbe: '',
+    pendingInput: [],
   };
   sessions.set(id, session);
   store.insert({
@@ -341,9 +451,29 @@ function loadPersistedSessions(): void {
       sockets: new Set(),
       alive: false,
       started: row.started,
+      ready: false,
+      readyProbe: '',
+      pendingInput: [],
     });
   }
+  // Sessions created before automatic naming are still titled with a
+  // timestamp. Adopt their first prompt now so the sidebar loads with names.
+  for (const session of sessions.values()) {
+    if (!session.title.startsWith('终端会话 ')) continue;
+    try {
+      syncSessionTitle(session, readTranscript(session.id));
+    } catch {
+      // An unreadable transcript keeps the default title.
+    }
+  }
   console.log(`sessions loaded: ${rows.length}`);
+}
+
+/** Applies a manual rename, both in memory and in SQLite. */
+function renameSession(session: Session, title: string): void {
+  session.title = title;
+  session.updatedAt = nowIso();
+  store.rename(session.id, title);
 }
 
 function deleteSession(id: string): boolean {
@@ -352,6 +482,14 @@ function deleteSession(id: string): boolean {
   if (session.saveTimer) {
     clearTimeout(session.saveTimer);
     session.saveTimer = undefined;
+  }
+  if (session.flushTimer) {
+    clearTimeout(session.flushTimer);
+    session.flushTimer = undefined;
+  }
+  if (session.readyTimer) {
+    clearTimeout(session.readyTimer);
+    session.readyTimer = undefined;
   }
   try {
     session.proc?.kill();
@@ -421,7 +559,7 @@ const server = Bun.serve<SocketData>({
   hostname: host,
   port,
   idleTimeout: 255,
-  fetch(request, srv) {
+  async fetch(request, srv) {
     const url = new URL(request.url);
     const method = request.method.toUpperCase();
 
@@ -499,6 +637,23 @@ const server = Bun.serve<SocketData>({
     }
 
     const sessionMatch = /^\/sessions\/([^/]+)$/.exec(url.pathname);
+    if (method === 'PATCH' && sessionMatch) {
+      const id = decodeURIComponent(sessionMatch[1]);
+      const session = sessions.get(id);
+      if (!session) return json({ detail: '会话不存在' }, 404);
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ detail: '请求体不是有效的 JSON' }, 400);
+      }
+      const rawTitle = (body as { title?: unknown } | null)?.title;
+      const title = typeof rawTitle === 'string' ? rawTitle.trim() : '';
+      if (!title) return json({ detail: '会话名称不能为空' }, 400);
+      renameSession(session, title.slice(0, MAX_TITLE_LENGTH));
+      return json({ session: summary(session) });
+    }
+
     if (method === 'DELETE' && sessionMatch) {
       const id = decodeURIComponent(sessionMatch[1]);
       return deleteSession(id)
@@ -579,7 +734,7 @@ const server = Bun.serve<SocketData>({
         const payload = JSON.parse(message) as Record<string, unknown>;
         if (payload.type === 'input' && typeof payload.data === 'string') {
           session.updatedAt = nowIso();
-          session.term?.write(payload.data);
+          writeInput(session, payload.data);
           return;
         }
         if (payload.type === 'resize') {
@@ -594,7 +749,7 @@ const server = Bun.serve<SocketData>({
         // Not JSON: treat the frame as raw input.
       }
       session.updatedAt = nowIso();
-      session.term?.write(message);
+      writeInput(session, message);
     },
     close(ws) {
       if (!ws.data.sessionId) return;
