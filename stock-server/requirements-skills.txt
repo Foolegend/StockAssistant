@@ -16,6 +16,9 @@ tushare==1.4.29
 pandas==3.0.2
 requests==2.33.1
 
+# 图表绘制（index-trend-chart：指数走势面积图 PNG）
+matplotlib
+
 # 文档处理技能（pdf / docx / docx-cn / pptx / xlsx / doc-handler）
 beautifulsoup4==4.14.3
 lxml==6.1.0

@@ -5,6 +5,13 @@
 # 智能分析由 stock-server/src 中的 StockAssistant CLI 实现。
 #
 # 若本机没有 Bun，脚本会自动下载安装到 ${BUN_INSTALL:-$HOME/.bun}。
+
+# 本脚本使用 bash 专有语法（[[ ]]、数组、BASH_SOURCE）。
+# 被 sh/dash 调用时（例如 `sh start_server.sh`）自动切回 bash。
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
+
 set -euo pipefail
 
 BACK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -4,6 +4,13 @@
 # Angular CLI 对 Node.js 有最低版本要求（读取 @angular/cli 的 engines.node）。
 # 若当前 Node 版本不满足要求，脚本会自动下载安装一个兼容版本到
 # ${STOCK_NODE_HOME:-$HOME/.local/share/stockassistant-node} 并优先使用它。
+
+# 本脚本使用 bash 专有语法（[[ ]]、数组、BASH_SOURCE）。
+# 被 sh/dash 调用时（例如 `sh start_ui.sh`）自动切回 bash。
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
+
 set -euo pipefail
 
 PORT=4200

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # StockAssistant 一键启动：Bun 后端 + Angular 前端（Linux / macOS）
 # 后端在后台运行，前端占用当前终端；Ctrl+C 会同时停止两者。
+
+# 本脚本使用 bash 专有语法（[[ ]]、(( ))、/dev/tcp、BASH_SOURCE）。
+# 被 sh/dash 调用时（例如 `sh start_all.sh`）自动切回 bash。
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
