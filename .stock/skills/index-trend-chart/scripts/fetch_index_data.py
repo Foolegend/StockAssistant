@@ -4,9 +4,9 @@
 
 数据源按可靠性降级（东方财富限流时自动切换）：
 
-  1. 东方财富  ak.index_zh_hist_em   直接返回月度行情，最快
-  2. 新浪      ak.index_zh_daily_sina 日线，脚本内重采样为月度
-  3. 腾讯      ak.index_zh_daily_tx   日线，脚本内重采样为月度
+  1. 东方财富  ak.stock_zh_index_daily_em   日线，脚本内重采样为月度
+  2. 新浪      ak.stock_zh_index_daily      日线，脚本内重采样为月度
+  3. 腾讯      ak.stock_zh_index_daily_tx   日线，脚本内重采样为月度
 
 用法：
     python fetch_index_data.py --index sh000001 --start 1990-01
@@ -73,20 +73,16 @@ def _akshare():
 
 
 def fetch_eastmoney(key: str, start: str, end: str) -> pd.DataFrame:
-    """东方财富：直接给月度行情。"""
+    """东方财富：日线（按请求区间）。"""
     ak = _akshare()
-    meta = INDEXES[key]
-    df = ak.index_zh_hist_em(
-        symbol=meta["code"],
-        period="monthly",
+    df = ak.stock_zh_index_daily_em(
+        symbol=key,
         start_date=start.replace("-", "") + "01",
         end_date=end.replace("-", "") + "28",
     )
     if df is None or df.empty:
         raise RuntimeError("东方财富返回空数据")
-    df = df.rename(columns={"日期": "date", "开盘": "open", "最高": "high",
-                            "最低": "low", "收盘": "close"})
-    df["date"] = pd.to_datetime(df["date"]).dt.to_period("M").astype(str)
+    df["date"] = pd.to_datetime(df["date"])
     df = df[["date", "open", "high", "low", "close"]].copy()
     df["source"] = "东方财富"
     return df
@@ -95,25 +91,25 @@ def fetch_eastmoney(key: str, start: str, end: str) -> pd.DataFrame:
 def fetch_daily_sina(key: str) -> pd.DataFrame:
     """新浪：日线全历史。"""
     ak = _akshare()
-    df = ak.index_zh_daily_sina(symbol=key)
+    df = ak.stock_zh_index_daily(symbol=key)
     if df is None or df.empty:
         raise RuntimeError("新浪返回空数据")
-    df = df.rename(columns={"date": "date", "open": "open", "high": "high",
-                            "low": "low", "close": "close"})
     df["date"] = pd.to_datetime(df["date"])
     df = df[["date", "open", "high", "low", "close"]].copy()
     df["source"] = "新浪财经"
     return df
 
 
-def fetch_daily_tx(key: str) -> pd.DataFrame:
-    """腾讯：日线全历史。"""
+def fetch_daily_tx(key: str, start: str, end: str) -> pd.DataFrame:
+    """腾讯：日线（按请求区间）。"""
     ak = _akshare()
-    df = ak.index_zh_daily_tx(symbol=key)
+    df = ak.stock_zh_index_daily_tx(
+        symbol=key,
+        start_date=start.replace("-", "") + "01",
+        end_date=end.replace("-", "") + "28",
+    )
     if df is None or df.empty:
         raise RuntimeError("腾讯返回空数据")
-    df = df.rename(columns={"date": "date", "open": "open", "high": "high",
-                            "low": "low", "close": "close"})
     df["date"] = pd.to_datetime(df["date"])
     df = df[["date", "open", "high", "low", "close"]].copy()
     df["source"] = "腾讯财经"
@@ -171,16 +167,13 @@ def fetch_with_fallback(key: str, start: str, end: str, refresh: bool,
     attempts = [
         ("东方财富", lambda: fetch_eastmoney(key, start, end)),
         ("新浪财经", lambda: fetch_daily_sina(key)),
-        ("腾讯财经", lambda: fetch_daily_tx(key)),
+        ("腾讯财经", lambda: fetch_daily_tx(key, start, end)),
     ]
     errors = []
     for label, fn in attempts:
         try:
             raw = fn()
-            if label == "东方财富":
-                monthly = raw
-            else:
-                monthly = to_monthly(raw)
+            monthly = to_monthly(raw)
             if monthly.empty:
                 raise RuntimeError("月度数据为空")
             monthly["date"] = monthly["date"].astype(str).str.slice(0, 7)
