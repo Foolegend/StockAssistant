@@ -71,6 +71,147 @@
                     </div>
                   }
                 </details>
+
+                @if (pendingQuestions(turn, entry); as questions) {
+                  <section class="ask" aria-live="polite">
+                    <header class="ask-head">
+                      <span class="ask-badge">等待你的回答</span>
+                      @if (askNeedsReview(entry)) {
+                        <span class="ask-progress">
+                          @if (askActive(entry) < questions.length) {
+                            问题 {{ askActive(entry) + 1 }} / {{ questions.length }}
+                          } @else {
+                            确认回答
+                          }
+                        </span>
+                      }
+                      <button
+                        type="button"
+                        class="ask-raw"
+                        (click)="requestRawTerminal()"
+                      >
+                        在终端中回答
+                      </button>
+                    </header>
+
+                    @for (question of questions; track question.question; let qi = $index) {
+                      <div
+                        class="ask-question"
+                        [class.current]="askActive(entry) === qi"
+                        [class.done]="askActive(entry) > qi"
+                      >
+                        <p class="ask-title">
+                          @if (question.header) {
+                            <span class="ask-chip">{{ question.header }}</span>
+                          }
+                          {{ question.question }}
+                        </p>
+
+                        <div class="ask-options">
+                          @for (option of question.options; track option.label; let oi = $index) {
+                            @if (question.multiSelect) {
+                              <button
+                                type="button"
+                                class="ask-option"
+                                [class.selected]="isOptionSelected(entry, qi, oi)"
+                                [disabled]="askBusy(entry) || askActive(entry) !== qi"
+                                (click)="toggleOption(entry, qi, oi)"
+                              >
+                                <span class="ask-check" aria-hidden="true">
+                                  {{ isOptionSelected(entry, qi, oi) ? '☑' : '☐' }}
+                                </span>
+                                <span class="ask-copy">
+                                  <span class="ask-label">{{ option.label }}</span>
+                                  @if (option.description) {
+                                    <span class="ask-desc">{{ option.description }}</span>
+                                  }
+                                </span>
+                              </button>
+                            } @else {
+                              <button
+                                type="button"
+                                class="ask-option"
+                                [disabled]="askBusy(entry) || askActive(entry) !== qi"
+                                (click)="answerOption(entry, qi, oi)"
+                              >
+                                <span class="ask-copy">
+                                  <span class="ask-label">{{ option.label }}</span>
+                                  @if (option.description) {
+                                    <span class="ask-desc">{{ option.description }}</span>
+                                  }
+                                </span>
+                              </button>
+                            }
+                          }
+                        </div>
+
+                        @if (!question.hasPreview) {
+                          <div class="ask-other">
+                            <input
+                              type="text"
+                              class="ask-other-input"
+                              [ngModel]="getOtherAnswer(entry, qi)"
+                              (ngModelChange)="setOtherAnswer(entry, qi, $event)"
+                              [disabled]="askBusy(entry) || askActive(entry) !== qi"
+                              placeholder="或填写其他回答"
+                              [attr.aria-label]="'其他回答：' + question.question"
+                            />
+                            @if (question.multiSelect) {
+                              <button
+                                type="button"
+                                class="ask-confirm"
+                                [disabled]="askBusy(entry) || askActive(entry) !== qi"
+                                (click)="submitMultiSelect(entry, qi)"
+                              >
+                                提交本题
+                              </button>
+                            } @else {
+                              <button
+                                type="button"
+                                class="ask-confirm"
+                                [disabled]="askBusy(entry) || askActive(entry) !== qi"
+                                (click)="answerOther(entry, qi)"
+                              >
+                                提交
+                              </button>
+                            }
+                          </div>
+                        }
+                      </div>
+                    }
+
+                    @if (askNeedsReview(entry) && askActive(entry) >= questions.length) {
+                      <div class="ask-footer">
+                        <button
+                          type="button"
+                          class="ask-submit"
+                          [disabled]="askBusy(entry)"
+                          (click)="submitReview(entry)"
+                        >
+                          提交回答
+                        </button>
+                      </div>
+                    }
+
+                    <div class="ask-status">
+                      @if (askLocked(entry)) {
+                        已提交回答，等待模型继续…
+                      } @else if (askBusy(entry)) {
+                        正在发送回答…
+                      } @else {
+                        回答会直接发送给终端中的助手。
+                      }
+                      <button
+                        type="button"
+                        class="ask-cancel"
+                        [disabled]="askBusy(entry)"
+                        (click)="cancelQuestion(entry)"
+                      >
+                        取消提问
+                      </button>
+                    </div>
+                  </section>
+                }
               }
               @case ('text') {
                 <article

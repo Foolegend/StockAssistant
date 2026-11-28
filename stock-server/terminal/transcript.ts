@@ -20,6 +20,26 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+/** One selectable answer of a pending AskUserQuestion. */
+export interface PendingQuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** A question the CLI is waiting for the user to answer. */
+export interface PendingQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: PendingQuestionOption[];
+  /**
+   * True when an option carries a preview. The CLI renders those questions
+   * with a different layout: digits move the highlight instead of selecting,
+   * and the free-text "Other" option is not offered.
+   */
+  hasPreview: boolean;
+}
+
 export interface TranscriptEntry {
   kind: 'thought' | 'tool' | 'text';
   key: string;
@@ -36,6 +56,11 @@ export interface TranscriptEntry {
   /** Tool output, ANSI stripped. */
   output?: string;
   error?: boolean;
+  /**
+   * Questions carried by an AskUserQuestion call, so the web UI can render
+   * them as buttons instead of leaving the user stuck in the terminal.
+   */
+  questions?: PendingQuestion[];
 }
 
 export interface TranscriptTurn {
@@ -70,6 +95,65 @@ export function stripAnsi(text: string): string {
     .replace(/\x1b\][^\x07]*\x07/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b[@-Z\\-_]/g, '');
+}
+
+/** Tool name of the built-in multiple-choice prompt. */
+const ASK_USER_QUESTION_TOOL = 'askuserquestion';
+
+/**
+ * Extracts the questions of an AskUserQuestion input, dropping everything the
+ * web UI does not need (previews can be large HTML fragments).
+ */
+function extractQuestions(input: unknown): PendingQuestion[] | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return undefined;
+  }
+  const raw = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(raw)) return undefined;
+
+  const questions: PendingQuestion[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const question =
+      typeof record['question'] === 'string' ? record['question'].trim() : '';
+    if (!question) continue;
+
+    const options: PendingQuestionOption[] = [];
+    const rawOptions = Array.isArray(record['options']) ? record['options'] : [];
+    let hasPreview = false;
+    for (const rawOption of rawOptions) {
+      if (!rawOption || typeof rawOption !== 'object') continue;
+      const option = rawOption as Record<string, unknown>;
+      const label =
+        typeof option['label'] === 'string' ? option['label'].trim() : '';
+      if (!label) continue;
+      if (typeof option['preview'] === 'string' && option['preview'].trim()) {
+        hasPreview = true;
+      }
+      options.push({
+        label,
+        ...(typeof option['description'] === 'string' &&
+        option['description'].trim()
+          ? { description: option['description'].trim() }
+          : {}),
+      });
+    }
+    if (!options.length) continue;
+
+    const multiSelect = record['multiSelect'] === true;
+    questions.push({
+      question,
+      ...(typeof record['header'] === 'string' && record['header'].trim()
+        ? { header: record['header'].trim() }
+        : {}),
+      multiSelect,
+      options,
+      // The preview layout is only used for single-select questions.
+      hasPreview: hasPreview && !multiSelect,
+    });
+  }
+  return questions.length ? questions : undefined;
 }
 
 /** Joins the text blocks of a tool result or message content. */
@@ -220,14 +304,19 @@ export function parseTranscript(jsonl: string, sessionId: string): Transcript {
             }
           } else if (item.type === 'tool_use') {
             const toolId = String(item.id ?? '');
+            const tool = String(item.name ?? 'tool');
             const entry: TranscriptEntry = {
               kind: 'tool',
               key: `tool-${current.entries.length}`,
               timestamp,
-              tool: String(item.name ?? 'tool'),
+              tool,
               tool_id: toolId,
               args: truncate(JSON.stringify(item.input ?? {}), MAX_ARGS),
             };
+            if (tool.toLowerCase() === ASK_USER_QUESTION_TOOL) {
+              const questions = extractQuestions(item.input);
+              if (questions) entry.questions = questions;
+            }
             current.entries.push(entry);
             pendingTools.set(toolId, entry);
           }

@@ -21,6 +21,25 @@ import { MarkdownPipe } from '../shared/markdown.pipe';
 
 const API_BASE = 'http://127.0.0.1:8015';
 
+/** One selectable answer of a pending AskUserQuestion. */
+interface PendingQuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** A multiple-choice question the CLI is waiting for the user to answer. */
+interface PendingQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: PendingQuestionOption[];
+  /**
+   * The CLI uses a preview layout for these questions: digits move the
+   * highlight, Enter selects, and there is no "Other" option.
+   */
+  hasPreview?: boolean;
+}
+
 /** One step of a turn: a thought, a tool call or interim assistant text. */
 interface TranscriptEntry {
   kind: 'thought' | 'tool' | 'text';
@@ -33,7 +52,32 @@ interface TranscriptEntry {
   args?: string;
   output?: string;
   error?: boolean;
+  /** Present while an AskUserQuestion call is waiting to be answered. */
+  questions?: PendingQuestion[];
 }
+
+/** Local answer progress for one pending AskUserQuestion call. */
+interface AskState {
+  /** Stable id of the pending tool call this state belongs to. */
+  toolId: string;
+  /** Index of the question being answered; equals the count at the review step. */
+  active: number;
+  /** Toggled option indexes per question (multi-select only). */
+  selected: number[][];
+  /** Free-text "Other" value per question. */
+  other: string[];
+  /** True while keystrokes are being written to the CLI. */
+  sending: boolean;
+  /** True once the answer is handed to the CLI and we wait for its reply. */
+  locked: boolean;
+}
+
+/** Sent to the CLI as a cursor-down keypress by the Ink select widgets. */
+const KEY_DOWN = '\u001b[B';
+/** Sent to the CLI as Enter. */
+const KEY_ENTER = '\r';
+/** Sent to the CLI as Escape. */
+const KEY_ESCAPE = '\u001b';
 
 interface TranscriptTurn {
   index: number;
@@ -102,6 +146,8 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   @Input() sessionId: string | null = null;
   /** Emits the first prompt so the sidebar can name the session at once. */
   @Output() firstPrompt = new EventEmitter<string>();
+  /** Asks the parent to show the raw terminal instead of this view. */
+  @Output() rawTerminalRequested = new EventEmitter<void>();
 
   @ViewChild('scroller') private scroller?: ElementRef<HTMLElement>;
   @ViewChild('composer') private composer?: ElementRef<HTMLTextAreaElement>;
@@ -116,6 +162,8 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   allCollapsed = true;
   draft = '';
   error: string | null = null;
+  /** Answer progress for the AskUserQuestion card, if one is pending. */
+  askState: AskState | null = null;
 
   /** Slash commands offered while the composer starts with "/". */
   slashOpen = false;
@@ -165,6 +213,7 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
     this.turns = [];
     this.running = false;
     this.error = null;
+    this.askState = null;
     this.namedSessionId = undefined;
     this.cdr.markForCheck();
     if (!this.sessionId) return;
@@ -208,6 +257,328 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
     const parsed = this.parseArgs(args);
     if (!parsed) return args ?? '';
     return JSON.stringify(parsed, null, 2);
+  }
+
+  // --- AskUserQuestion ---------------------------------------------------
+  //
+  // The CLI shows its multiple-choice dialog inside the PTY and waits for
+  // keystrokes. The structured view knows the questions from the transcript,
+  // so it renders them as buttons and forwards the matching keys: digits
+  // select an option directly (the Ink select supports 1-based indexes), the
+  // arrow keys move focus, and Enter confirms.
+
+  /** Questions to answer, or null when this entry is not a pending prompt. */
+  pendingQuestions(
+    turn: TranscriptTurn,
+    entry: TranscriptEntry,
+  ): PendingQuestion[] | null {
+    if (!turn.running || entry.kind !== 'tool') return null;
+    if (entry.output !== undefined) return null;
+    return entry.questions?.length ? entry.questions : null;
+  }
+
+  askActive(entry: TranscriptEntry): number {
+    return this.askStateFor(entry)?.active ?? 0;
+  }
+
+  askBusy(entry: TranscriptEntry): boolean {
+    const state = this.askStateFor(entry);
+    return !!state && (state.sending || state.locked);
+  }
+
+  askLocked(entry: TranscriptEntry): boolean {
+    return this.askStateFor(entry)?.locked ?? false;
+  }
+
+  /**
+   * A single single-select question is submitted by picking an option. Any
+   * other shape finishes on a separate review step inside the CLI.
+   */
+  askNeedsReview(entry: TranscriptEntry): boolean {
+    const questions = entry.questions ?? [];
+    return !(questions.length === 1 && !questions[0]?.multiSelect);
+  }
+
+  isOptionSelected(
+    entry: TranscriptEntry,
+    questionIndex: number,
+    optionIndex: number,
+  ): boolean {
+    const selected = this.askStateFor(entry)?.selected[questionIndex];
+    return Array.isArray(selected) && selected.includes(optionIndex);
+  }
+
+  getOtherAnswer(entry: TranscriptEntry, questionIndex: number): string {
+    return this.askStateFor(entry)?.other[questionIndex] ?? '';
+  }
+
+  setOtherAnswer(
+    entry: TranscriptEntry,
+    questionIndex: number,
+    value: string,
+  ): void {
+    const state = this.askStateFor(entry);
+    if (!state) return;
+    state.other[questionIndex] = value;
+    this.cdr.markForCheck();
+  }
+
+  /** Multi-select options toggle locally; the answer is sent on submit. */
+  toggleOption(
+    entry: TranscriptEntry,
+    questionIndex: number,
+    optionIndex: number,
+  ): void {
+    const state = this.askStateFor(entry);
+    if (!state || state.sending || state.locked) return;
+    if (state.active !== questionIndex) return;
+    const selected = state.selected[questionIndex];
+    if (!selected) return;
+    state.selected[questionIndex] = selected.includes(optionIndex)
+      ? selected.filter((index) => index !== optionIndex)
+      : [...selected, optionIndex];
+    this.cdr.markForCheck();
+  }
+
+  /** Picks one option of a single-select question. */
+  async answerOption(
+    entry: TranscriptEntry,
+    questionIndex: number,
+    optionIndex: number,
+  ): Promise<void> {
+    const state = this.askStateFor(entry);
+    const question = entry.questions?.[questionIndex];
+    if (!state || !question || question.multiSelect) return;
+    if (state.sending || state.locked || state.active !== questionIndex) return;
+
+    state.sending = true;
+    this.cdr.markForCheck();
+    try {
+      // The preview layout moves the highlight on a digit and needs Enter,
+      // while the compact layout selects on the digit itself.
+      const keys = question.hasPreview
+        ? [String(optionIndex + 1), KEY_ENTER]
+        : [String(optionIndex + 1)];
+      await this.sendKeys(keys, {
+        gapMs: question.hasPreview ? 220 : 160,
+        settleMs: 320,
+      });
+      this.advanceQuestion(entry, questionIndex);
+    } catch {
+      this.error = '无法连接终端服务，请切换到原始终端回答';
+    } finally {
+      state.sending = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  /** Focuses the CLI's free-text "Other" option, types, and confirms. */
+  async answerOther(
+    entry: TranscriptEntry,
+    questionIndex: number,
+  ): Promise<void> {
+    const state = this.askStateFor(entry);
+    const question = entry.questions?.[questionIndex];
+    if (!state || !question || question.multiSelect) return;
+    if (state.sending || state.locked || state.active !== questionIndex) return;
+    const text = (state.other[questionIndex] ?? '').trim();
+    if (!text) return;
+
+    state.sending = true;
+    this.cdr.markForCheck();
+    try {
+      // The "Other" input is appended after the listed options.
+      const otherIndex = question.options.length + 1;
+      await this.sendKeys([String(otherIndex), text, KEY_ENTER], {
+        gapMs: 240,
+        settleMs: 320,
+      });
+      this.advanceQuestion(entry, questionIndex);
+    } catch {
+      this.error = '无法连接终端服务，请切换到原始终端回答';
+    } finally {
+      state.sending = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  /** Sends the toggled options of a multi-select question and confirms it. */
+  async submitMultiSelect(
+    entry: TranscriptEntry,
+    questionIndex: number,
+  ): Promise<void> {
+    const state = this.askStateFor(entry);
+    const question = entry.questions?.[questionIndex];
+    if (!state || !question || !question.multiSelect) return;
+    if (state.sending || state.locked || state.active !== questionIndex) return;
+
+    const selected = state.selected[questionIndex] ?? [];
+    const other = (state.other[questionIndex] ?? '').trim();
+    if (!selected.length && !other) return;
+
+    // Options are toggled by their 1-based number; the cursor does not move.
+    const keys: string[] = selected.map((index) => String(index + 1));
+    // "Other" is the last option; walk down to it and type the answer.
+    const optionCount = question.options.length + 1;
+    if (other) {
+      keys.push(
+        ...Array(optionCount - 1).fill(KEY_DOWN),
+        other,
+        KEY_ENTER,
+        KEY_DOWN,
+        KEY_ENTER,
+      );
+    } else {
+      // Walk past every option to focus the submit button, then confirm.
+      keys.push(...Array(optionCount).fill(KEY_DOWN), KEY_ENTER);
+    }
+
+    state.sending = true;
+    this.cdr.markForCheck();
+    try {
+      await this.sendKeys(keys, { gapMs: 160, settleMs: 320 });
+      this.advanceQuestion(entry, questionIndex);
+    } catch {
+      this.error = '无法连接终端服务，请切换到原始终端回答';
+    } finally {
+      state.sending = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  /** Confirms the CLI's "Review your answers" step. */
+  async submitReview(entry: TranscriptEntry): Promise<void> {
+    const state = this.askStateFor(entry);
+    if (!state || state.sending || state.locked) return;
+    if (!this.askNeedsReview(entry)) return;
+
+    state.sending = true;
+    this.cdr.markForCheck();
+    try {
+      // The review list focuses "Submit answers" first.
+      await this.sendKeys(['1'], { settleMs: 320 });
+      state.locked = true;
+    } catch {
+      this.error = '无法连接终端服务，请切换到原始终端回答';
+    } finally {
+      state.sending = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  /** Declines the question (Escape in the CLI dialog). */
+  async cancelQuestion(entry: TranscriptEntry): Promise<void> {
+    const state = this.askStateFor(entry);
+    if (!state || state.sending || state.locked) return;
+
+    state.sending = true;
+    this.cdr.markForCheck();
+    try {
+      await this.sendKeys([KEY_ESCAPE], { settleMs: 320 });
+      state.locked = true;
+    } catch {
+      this.error = '无法连接终端服务，请切换到原始终端回答';
+    } finally {
+      state.sending = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  requestRawTerminal(): void {
+    this.rawTerminalRequested.emit();
+  }
+
+  private askId(entry: TranscriptEntry): string {
+    return entry.tool_id || entry.key;
+  }
+
+  private askStateFor(entry: TranscriptEntry): AskState | null {
+    const state = this.askState;
+    return state && state.toolId === this.askId(entry) ? state : null;
+  }
+
+  /** Moves to the next question, or to the review step after the last one. */
+  private advanceQuestion(
+    entry: TranscriptEntry,
+    questionIndex: number,
+  ): void {
+    const state = this.askStateFor(entry);
+    if (!state) return;
+    const total = entry.questions?.length ?? 0;
+    if (questionIndex + 1 < total) {
+      state.active = questionIndex + 1;
+    } else {
+      state.active = total;
+      // Without a review step the CLI has already submitted the answer.
+      if (!this.askNeedsReview(entry)) {
+        state.locked = true;
+      }
+    }
+    this.cdr.markForCheck();
+  }
+
+  /** Creates or clears the local answer state when the pending prompt changes. */
+  private syncAskState(): void {
+    const pending = this.findPendingQuestion();
+    if (!pending) {
+      this.askState = null;
+      return;
+    }
+    if (this.askState?.toolId === pending.toolId) return;
+    const count = pending.questions.length;
+    this.askState = {
+      toolId: pending.toolId,
+      active: 0,
+      selected: Array.from({ length: count }, () => [] as number[]),
+      other: Array.from({ length: count }, () => ''),
+      sending: false,
+      locked: false,
+    };
+  }
+
+  private findPendingQuestion(): {
+    toolId: string;
+    questions: PendingQuestion[];
+  } | null {
+    for (let turnIndex = this.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+      const turn = this.turns[turnIndex];
+      if (!turn.running) continue;
+      for (let index = turn.entries.length - 1; index >= 0; index -= 1) {
+        const entry = turn.entries[index];
+        const questions = this.pendingQuestions(turn, entry);
+        if (questions) {
+          return { toolId: this.askId(entry), questions };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Writes keys to the CLI one message at a time, with a gap between them. */
+  private async sendKeys(
+    keys: string[],
+    options: { gapMs?: number; settleMs?: number } = {},
+  ): Promise<void> {
+    const gapMs = options.gapMs ?? 160;
+    await this.ensureSocket();
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error('socket not open');
+    }
+    const sends = keys.filter((key) => key.length > 0);
+    for (let index = 0; index < sends.length; index += 1) {
+      socket.send(JSON.stringify({ type: 'input', data: sends[index] }));
+      if (index < sends.length - 1) {
+        await this.delay(gapMs);
+      }
+    }
+    if (options.settleMs) {
+      await this.delay(options.settleMs);
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   onKeydown(event: KeyboardEvent): void {
@@ -459,6 +830,9 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
         this.ready = payload.ready !== false;
         this.connected = true;
         this.error = null;
+        // The transcript is replaced on every push, so the pending-question
+        // card keeps its progress keyed by the tool call id.
+        this.syncAskState();
         const prompt = this.turns[0]?.prompt;
         if (prompt && this.namedSessionId !== this.sessionId) {
           this.namedSessionId = this.sessionId ?? undefined;

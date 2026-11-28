@@ -179,6 +179,7 @@
           class="transcript-column"
           [sessionId]="activeSessionId"
           (firstPrompt)="onFirstPrompt($event)"
+          (rawTerminalRequested)="toggleRawTerminal()"
         />
       }
     </div>
