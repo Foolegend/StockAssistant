@@ -306,16 +306,149 @@
   margin-bottom: 0;
 }
 
-/* Skill artifacts (e.g. index charts) are embedded by the answer Markdown. */
+/* Skill artifacts (e.g. index charts) are embedded by the answer Markdown.
+   Cap both dimensions so the whole plot fits on screen instead of being
+   clipped inside the vertically scrolling transcript. */
 .answer img {
   display: block;
-  max-width: 100%;
+  width: auto;
   height: auto;
-  margin: 14px 0;
+  max-width: 100%;
+  max-height: 62vh;
+  margin: 14px auto;
   padding: 6px;
   border: 1px solid #e2e9f1;
   border-radius: 8px;
   background: #fff;
+  cursor: zoom-in;
+}
+
+.answer img:hover {
+  border-color: #9bbde0;
+}
+
+/* --- image lightbox ---------------------------------------------------- */
+
+.image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 16, 24, 0.88);
+  backdrop-filter: blur(2px);
+  cursor: default;
+}
+
+.image-viewer-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  color: #dce8f5;
+  background: rgba(15, 23, 34, 0.94);
+  font-size: 12px;
+}
+
+.image-viewer-title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-viewer-hint {
+  color: #93a6bb;
+  font-size: 11px;
+}
+
+.image-viewer-x {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  color: #dce8f5;
+  background: rgba(255, 255, 255, 0.08);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-viewer-x:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.image-viewer-inner {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.image-viewer-inner img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 170px);
+  margin: 0 auto;
+  border-radius: 6px;
+  background: #fff;
+  cursor: zoom-in;
+}
+
+.image-viewer-inner img.zoomed {
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border-radius: 0;
+  cursor: zoom-out;
+}
+
+.image-viewer-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 10px 18px;
+  color: #d7e1ee;
+  background: rgba(15, 23, 34, 0.94);
+  font-size: 12px;
+}
+
+.image-viewer-bar span {
+  color: #9eb0c4;
+}
+
+.image-viewer-bar button,
+.image-viewer-bar a {
+  padding: 4px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  color: #dce8f5;
+  background: rgba(255, 255, 255, 0.06);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.image-viewer-bar button:hover,
+.image-viewer-bar a:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.image-viewer-close {
+  margin-left: auto;
 }
 
 .answer h1,

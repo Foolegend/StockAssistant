@@ -4,6 +4,7 @@ import {
   Component,
   ElementRef,
   EventEmitter,
+  HostListener,
   Input,
   OnChanges,
   OnDestroy,
@@ -164,6 +165,11 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   error: string | null = null;
   /** Answer progress for the AskUserQuestion card, if one is pending. */
   askState: AskState | null = null;
+
+  /** Image opened in the lightbox, if any. */
+  previewImage: string | null = null;
+  previewAlt = '';
+  previewZoomed = false;
 
   /** Slash commands offered while the composer starts with "/". */
   slashOpen = false;
@@ -486,6 +492,43 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
 
   requestRawTerminal(): void {
     this.rawTerminalRequested.emit();
+  }
+
+  // --- Embedded images ---------------------------------------------------
+  //
+  // Charts are embedded by the answer Markdown.  Inline they are scaled down
+  // to fit the viewport so the whole plot is visible; clicking one opens a
+  // lightbox that can switch between "fit" and natural size (scroll to pan).
+
+  /** Opens an answer image in the lightbox. */
+  onContentClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (!target || target.tagName !== 'IMG') return;
+    if (!target.closest('.answer')) return;
+    const src = target.getAttribute('src');
+    if (!src) return;
+    event.preventDefault();
+    this.previewImage = src;
+    this.previewAlt = target.getAttribute('alt') || '图表';
+    this.previewZoomed = false;
+    this.cdr.markForCheck();
+  }
+
+  closeImagePreview(): void {
+    if (!this.previewImage) return;
+    this.previewImage = null;
+    this.previewZoomed = false;
+    this.cdr.markForCheck();
+  }
+
+  toggleImageZoom(): void {
+    this.previewZoomed = !this.previewZoomed;
+    this.cdr.markForCheck();
+  }
+
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    this.closeImagePreview();
   }
 
   private askId(entry: TranscriptEntry): string {

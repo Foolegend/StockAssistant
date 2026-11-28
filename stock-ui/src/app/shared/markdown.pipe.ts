@@ -59,6 +59,9 @@ function rewriteArtifactUrls(html: string): string {
     image.setAttribute('src', url);
     image.setAttribute('loading', 'lazy');
     image.setAttribute('decoding', 'async');
+    if (!image.getAttribute('title')) {
+      image.setAttribute('title', '点击查看大图');
+    }
     changed = true;
   });
 

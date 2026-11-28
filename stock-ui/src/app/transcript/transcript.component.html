@@ -25,7 +25,7 @@
     </div>
   </header>
 
-  <div class="transcript-body" #scroller>
+  <div class="transcript-body" #scroller (click)="onContentClick($event)">
     @if (!sessionId) {
       <p class="transcript-empty">选择或新建一个会话后，这里会显示完整的分析过程。</p>
     } @else if (!turns.length) {
@@ -291,5 +291,67 @@
 
   @if (error) {
     <p class="composer-error">{{ error }}</p>
+  }
+
+  @if (previewImage) {
+    <div
+      class="image-viewer"
+      role="dialog"
+      aria-modal="true"
+      [attr.aria-label]="previewAlt"
+      (click)="closeImagePreview()"
+    >
+      <div class="image-viewer-top">
+        <span class="image-viewer-title">{{ previewAlt }}</span>
+        <span class="image-viewer-hint">点击空白处或按 Esc 关闭</span>
+        <button
+          type="button"
+          class="image-viewer-x"
+          (click)="closeImagePreview()"
+          aria-label="关闭大图"
+          title="关闭"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="image-viewer-inner" [class.zoomed]="previewZoomed">
+        <img
+          [src]="previewImage"
+          [alt]="previewAlt"
+          [class.zoomed]="previewZoomed"
+          title="点击切换「适应窗口 / 原始大小」"
+          (click)="$event.stopPropagation(); toggleImageZoom()"
+        />
+      </div>
+
+      <div class="image-viewer-bar" (click)="$event.stopPropagation()">
+        <span>
+          {{ previewZoomed ? '原始大小：可滚动查看细节' : '适应窗口：整图可见' }}
+        </span>
+        <button
+          type="button"
+          class="image-viewer-toggle"
+          (click)="toggleImageZoom()"
+        >
+          {{ previewZoomed ? '还原为适应窗口' : '查看原始大小' }}
+        </button>
+        <a
+          class="image-viewer-open"
+          [href]="previewImage"
+          target="_blank"
+          rel="noopener"
+        >
+          新标签打开
+        </a>
+        <button
+          type="button"
+          class="image-viewer-close"
+          (click)="closeImagePreview()"
+        >
+          关闭
+        </button>
+      </div>
+    </div>
   }
 </section>
