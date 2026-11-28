@@ -38,6 +38,7 @@ import { PreferenceStore, type Preference } from './preferences';
 import { SessionStore } from './store';
 import {
   clearTranscriptCache,
+  detectPendingApproval,
   hasCliSession,
   readTranscript,
   stripAnsi,
@@ -304,6 +305,11 @@ function transcriptEventStream(sessionId: string): Response {
             // Whether the CLI has mounted its prompt and reads stdin yet.
             ready: session?.ready ?? false,
             alive: session?.alive ?? false,
+            // A permission dialog only exists on the terminal screen, so it
+            // has to be lifted out of the PTY buffer for the structured view.
+            pending_approval: session
+              ? detectPendingApproval(session.buffer, payload)
+              : null,
           });
           if (text === last) return;
           last = text;
@@ -793,7 +799,12 @@ const server = Bun.serve<SocketData>({
       const transcript = readTranscript(id);
       const session = sessions.get(id);
       if (session) syncSessionTitle(session, transcript);
-      return json(transcript);
+      return json({
+        ...transcript,
+        pending_approval: session
+          ? detectPendingApproval(session.buffer, transcript)
+          : null,
+      });
     }
 
     const outputMatch = /^\/sessions\/([^/]+)\/output$/.exec(url.pathname);

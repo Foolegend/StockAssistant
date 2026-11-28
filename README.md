@@ -28,7 +28,7 @@ StockAssistant 是一款集成多种金融分析技能（Skills）和 MCP（Mode
 
 ### 2. 前端（stock-ui）
 
-- **分析视图（默认）**：[transcript.component.ts](stock-ui/src/app/transcript/transcript.component.ts)，把 CLI 自己的会话转写（`~/.stock/projects/*/<id>.jsonl`）渲染成「用户提问 → 思考 → 工具调用（IN/OUT）→ 最终结论」的证据链，通过 SSE 实时更新；底部自带输入框，输入经 WebSocket 写回 CLI 的 REPL
+- **分析视图（默认）**：[transcript.component.ts](stock-ui/src/app/transcript/transcript.component.ts)，把 CLI 自己的会话转写（`~/.stock/projects/*/<id>.jsonl`）渲染成「用户提问 → 思考 → 工具调用（IN/OUT）→ 最终结论」的证据链，通过 SSE 实时更新；底部自带输入框，输入经 WebSocket 写回 CLI 的 REPL。`AskUserQuestion` 与终端里的权限确认框（`.stock/`、`.git/` 等安全路径即使在 bypass 模式下也会询问）都可以直接在分析视图里回答，回答以按键形式写回 PTY；也可一键切到原始终端处理
 - **原始终端（顶栏切换）**：[terminal.component.ts](stock-ui/src/app/terminal/terminal.component.ts)，基于 **xterm.js**，展示 CLI 的 Ink 界面原貌
 - 默认路由 `/` 重定向到 `/terminal`
 - WebSocket 连接：`ws://127.0.0.1:8015/terminal/ws?session=<id>&cols=...&rows=...`（加 `&echo=0` 可跳过缓冲区回放）

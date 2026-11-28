@@ -229,10 +229,49 @@
       }
     }
 
+    @if (pendingApproval; as approval) {
+      <section class="ask approval" aria-live="polite">
+        <header class="ask-head">
+          <span class="ask-badge">等待你确认</span>
+          <button
+            type="button"
+            class="ask-raw"
+            (click)="requestRawTerminal()"
+          >
+            在终端中处理
+          </button>
+        </header>
+        <p class="ask-title">{{ approval.question }}</p>
+        <div class="ask-options">
+          @for (option of approval.options; track option.key) {
+            <button
+              type="button"
+              class="ask-option"
+              [disabled]="approvalBusy"
+              (click)="answerApproval(option)"
+            >
+              <span class="ask-copy">
+                <span class="ask-label">{{ option.label }}</span>
+              </span>
+            </button>
+          }
+        </div>
+        <div class="ask-status">
+          @if (approvalLocked) {
+            已发送选择，等待模型继续…
+          } @else if (approvalSending) {
+            正在发送选择…
+          } @else {
+            确认会直接发送给终端中的助手。
+          }
+        </div>
+      </section>
+    }
+
     @if (running) {
       <p class="running-indicator">
         <span class="pulse" aria-hidden="true"></span>
-        正在分析，过程会实时更新…
+        {{ pendingApproval ? '等待确认，确认后继续…' : '正在分析，过程会实时更新…' }}
       </p>
     }
   </div>

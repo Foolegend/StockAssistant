@@ -40,6 +40,28 @@ export interface PendingQuestion {
   hasPreview: boolean;
 }
 
+/** One selectable answer of a permission dialog shown in the terminal. */
+export interface PendingApprovalOption {
+  /** Keystroke the CLI's select widget accepts for this option. */
+  key: string;
+  label: string;
+}
+
+/**
+ * A permission dialog the CLI is displaying in the PTY and waiting on.
+ *
+ * These prompts are not part of the JSONL transcript: they only exist on the
+ * terminal screen. Without surfacing them the structured view looks stuck on
+ * the pending tool call, while the CLI is actually blocked on confirmation.
+ */
+export interface PendingApproval {
+  /** The tool call the confirmation belongs to. */
+  tool_id: string;
+  /** Question as rendered by the CLI, e.g. "Do you want to make this edit to x.py?". */
+  question: string;
+  options: PendingApprovalOption[];
+}
+
 export interface TranscriptEntry {
   kind: 'thought' | 'tool' | 'text';
   key: string;
@@ -56,6 +78,8 @@ export interface TranscriptEntry {
   /** Tool output, ANSI stripped. */
   output?: string;
   error?: boolean;
+  /** Main file/path argument of the call (kept untruncated for matching). */
+  target?: string;
   /**
    * Questions carried by an AskUserQuestion call, so the web UI can render
    * them as buttons instead of leaving the user stuck in the terminal.
@@ -171,6 +195,23 @@ function textBlocks(content: unknown): string {
       .trim();
   }
   return '';
+}
+
+/** Argument keys that identify what a tool call acts on. */
+const TARGET_KEYS = ['file_path', 'notebook_path', 'path'] as const;
+
+/** Main file/path argument of a tool call, if any. */
+function toolTarget(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return undefined;
+  }
+  const record = input as Record<string, unknown>;
+  for (const key of TARGET_KEYS) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number') return String(value);
+  }
+  return undefined;
 }
 
 /** Finds the CLI's own saved session file (~/.stock/projects/<dir>/<id>.jsonl). */
@@ -305,6 +346,7 @@ export function parseTranscript(jsonl: string, sessionId: string): Transcript {
           } else if (item.type === 'tool_use') {
             const toolId = String(item.id ?? '');
             const tool = String(item.name ?? 'tool');
+            const target = toolTarget(item.input);
             const entry: TranscriptEntry = {
               kind: 'tool',
               key: `tool-${current.entries.length}`,
@@ -312,6 +354,7 @@ export function parseTranscript(jsonl: string, sessionId: string): Transcript {
               tool,
               tool_id: toolId,
               args: truncate(JSON.stringify(item.input ?? {}), MAX_ARGS),
+              ...(target ? { target } : {}),
             };
             if (tool.toLowerCase() === ASK_USER_QUESTION_TOOL) {
               const questions = extractQuestions(item.input);
@@ -364,6 +407,113 @@ export function parseTranscript(jsonl: string, sessionId: string): Transcript {
     updated_at: turns[turns.length - 1]?.updatedAt ?? null,
     running: lastRunning,
   };
+}
+
+/** Tools whose confirmation dialog names the file being modified. */
+const FILE_EDIT_TOOLS = new Set([
+  'edit',
+  'edit_file',
+  'multiedit',
+  'multi_edit',
+  'write',
+  'write_file',
+  'notebookedit',
+  'notebook_edit',
+  'sededit',
+]);
+
+/** A tool call that has been issued but has not produced a result yet. */
+function pendingToolCall(
+  transcript: Transcript,
+): { toolId: string; target: string } | null {
+  for (let turnIndex = transcript.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = transcript.turns[turnIndex];
+    if (!turn.running) continue;
+    for (let index = turn.entries.length - 1; index >= 0; index -= 1) {
+      const entry = turn.entries[index];
+      if (entry.kind !== 'tool') continue;
+      // Only the last tool call can be the one the CLI is blocked on.
+      if (entry.output !== undefined) return null;
+      const tool = (entry.tool ?? '').toLowerCase();
+      if (!FILE_EDIT_TOOLS.has(tool) || !entry.target) return null;
+      return {
+        toolId: entry.tool_id ?? entry.key,
+        target: entry.target,
+      };
+    }
+    return null;
+  }
+  return null;
+}
+
+/** Numbered Yes/No options of a permission dialog, in CLI order. */
+function approvalOptions(text: string): PendingApprovalOption[] | null {
+  const found: { key: number; isNo: boolean }[] = [];
+  // Ink often renders the options without spaces ("1.Yes2.Yes3.No"), so the
+  // number must not be preceded by another option's text; lookbehind keeps
+  // consecutive matches independent.
+  for (const match of text.matchAll(/(?<![\d.])([1-9])\.\s*(Yes|No)/gi)) {
+    found.push({ key: Number(match[1]), isNo: match[2].toLowerCase() === 'no' });
+  }
+  if (found.length < 2) return null;
+  if (!found.some((item) => item.isNo)) return null;
+  if (!found.some((item) => !item.isNo)) return null;
+
+  let yesSeen = 0;
+  return found
+    .sort((left, right) => left.key - right.key)
+    .filter(
+      (item, index, all) =>
+        all.findIndex((other) => other.key === item.key) === index,
+    )
+    .map((item) => {
+      if (item.isNo) return { key: String(item.key), label: '拒绝' };
+      yesSeen += 1;
+      return {
+        key: String(item.key),
+        label: yesSeen === 1 ? '允许本次' : '允许（本会话内不再询问）',
+      };
+    });
+}
+
+/**
+ * Detects a file-modification confirmation the CLI is displaying on the
+ * terminal screen.
+ *
+ * Safety checks for paths such as `.stock/` are bypass-immune, so the CLI
+ * can block on a permission dialog even with `--dangerously-skip-permissions`.
+ * The dialog never reaches the JSONL transcript; this reads the tail of the
+ * PTY output instead and only reports it while the matching tool call is
+ * still waiting for its result.
+ */
+export function detectPendingApproval(
+  output: string,
+  transcript: Transcript,
+): PendingApproval | null {
+  const pending = pendingToolCall(transcript);
+  if (!pending) return null;
+
+  // Ink only emits changed lines, so the visible dialog is in the recent
+  // output; older frames have scrolled far out of the window.
+  const tail = stripAnsi(output.slice(-32000));
+  if (!tail) return null;
+
+  const name = (pending.target.split(/[\\/]/).pop() ?? '').toLowerCase();
+  if (!name) return null;
+
+  const questions = [...tail.matchAll(/Do you want to [^?\n]{0,200}\?/gi)];
+  for (let index = questions.length - 1; index >= 0; index -= 1) {
+    const match = questions[index];
+    const question = match[0];
+    if (!question.toLowerCase().includes(name)) continue;
+    const rest = tail.slice(
+      match.index! + question.length,
+      match.index! + question.length + 400,
+    );
+    const options = approvalOptions(rest);
+    if (options) return { tool_id: pending.toolId, question, options };
+  }
+  return null;
 }
 
 interface TranscriptCacheEntry {

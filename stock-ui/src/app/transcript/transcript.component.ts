@@ -41,6 +41,24 @@ interface PendingQuestion {
   hasPreview?: boolean;
 }
 
+/** One selectable answer of a permission dialog shown in the terminal. */
+interface PendingApprovalOption {
+  /** Keystroke the CLI's select widget accepts for this option. */
+  key: string;
+  label: string;
+}
+
+/**
+ * A permission dialog the CLI is displaying in the terminal and waiting on.
+ * Safety-checked paths (`.stock/`, `.git/`, …) prompt even in bypass mode,
+ * and the prompt never reaches the JSONL transcript.
+ */
+interface PendingApproval {
+  tool_id: string;
+  question: string;
+  options: PendingApprovalOption[];
+}
+
 /** One step of a turn: a thought, a tool call or interim assistant text. */
 interface TranscriptEntry {
   kind: 'thought' | 'tool' | 'text';
@@ -53,6 +71,8 @@ interface TranscriptEntry {
   args?: string;
   output?: string;
   error?: boolean;
+  /** Main file/path argument of the call. */
+  target?: string;
   /** Present while an AskUserQuestion call is waiting to be answered. */
   questions?: PendingQuestion[];
 }
@@ -97,6 +117,8 @@ interface TranscriptPayload {
   running: boolean;
   /** True once the CLI has mounted its prompt and reads stdin. */
   ready?: boolean;
+  /** A permission dialog the CLI is waiting on, if any. */
+  pending_approval?: PendingApproval | null;
 }
 
 /** Human-readable names for the tools the CLI may call. */
@@ -166,6 +188,15 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
   /** Answer progress for the AskUserQuestion card, if one is pending. */
   askState: AskState | null = null;
 
+  /** Permission dialog the CLI is waiting on, if any. */
+  pendingApproval: PendingApproval | null = null;
+  /** True while the chosen option is being written to the CLI. */
+  approvalSending = false;
+  /** True once an option was sent for the current dialog. */
+  approvalLocked = false;
+  /** Tool call the current approval belongs to, used to reset the lock. */
+  private approvalToolId: string | null = null;
+
   /** Image opened in the lightbox, if any. */
   previewImage: string | null = null;
   previewAlt = '';
@@ -206,9 +237,15 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
     if (this.error) return '连接异常';
     if (!this.sessionId) return '未选择会话';
     if (!this.connected) return '正在连接…';
+    if (this.pendingApproval) return '等待确认…';
     if (this.running) return '分析中…';
     if (!this.ready) return 'CLI 启动中…';
     return this.turns.length ? '已更新' : '等待输入';
+  }
+
+  /** True while the permission card's buttons must stay disabled. */
+  get approvalBusy(): boolean {
+    return this.approvalSending || this.approvalLocked;
   }
 
   restart(): void {
@@ -220,6 +257,10 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
     this.running = false;
     this.error = null;
     this.askState = null;
+    this.pendingApproval = null;
+    this.approvalSending = false;
+    this.approvalLocked = false;
+    this.approvalToolId = null;
     this.namedSessionId = undefined;
     this.cdr.markForCheck();
     if (!this.sessionId) return;
@@ -486,6 +527,40 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
       this.error = '无法连接终端服务，请切换到原始终端回答';
     } finally {
       state.sending = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  // --- Permission dialog --------------------------------------------------
+  //
+  // Safety-checked paths (`.stock/`, `.git/`, shell configs) prompt even in
+  // bypass mode, and that dialog exists only on the terminal screen. The
+  // server lifts it out of the PTY buffer; the card forwards the chosen
+  // digit to the CLI, the same way the AskUserQuestion card does.
+
+  /** Keeps the card in step with the dialog the server detected. */
+  private syncApproval(approval: PendingApproval | null): void {
+    if (approval && approval.tool_id !== this.approvalToolId) {
+      this.approvalToolId = approval.tool_id;
+      this.approvalSending = false;
+      this.approvalLocked = false;
+    }
+    this.pendingApproval = approval;
+  }
+
+  /** Sends the digit of the chosen option to the CLI's select widget. */
+  async answerApproval(option: PendingApprovalOption): Promise<void> {
+    if (!this.pendingApproval || this.approvalBusy) return;
+    this.approvalSending = true;
+    this.error = null;
+    this.cdr.markForCheck();
+    try {
+      await this.sendKeys([option.key], { settleMs: 320 });
+      this.approvalLocked = true;
+    } catch {
+      this.error = '无法连接终端服务，请切换到原始终端处理';
+    } finally {
+      this.approvalSending = false;
       this.cdr.markForCheck();
     }
   }
@@ -876,6 +951,7 @@ export class TranscriptComponent implements OnChanges, OnDestroy {
         // The transcript is replaced on every push, so the pending-question
         // card keeps its progress keyed by the tool call id.
         this.syncAskState();
+        this.syncApproval(payload.pending_approval ?? null);
         const prompt = this.turns[0]?.prompt;
         if (prompt && this.namedSessionId !== this.sessionId) {
           this.namedSessionId = this.sessionId ?? undefined;
