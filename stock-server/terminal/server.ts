@@ -18,6 +18,7 @@
  *   GET    /sessions/:id/output
  *   GET    /sessions/:id/transcript
  *   GET    /sessions/:id/transcript/stream   (SSE, live transcript)
+ *   GET    /files/<repo-relative path>        (artifacts under out/)
  *   GET    /agent/preferences
  *   POST   /agent/preferences
  *   PATCH  /agent/preferences/:id
@@ -29,7 +30,8 @@
  *   server -> client: session buffer replay + raw ANSI output
  */
 
-import { join } from 'node:path';
+import { statSync } from 'node:fs';
+import { basename, extname, join, resolve, sep } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { loadStockExtensions } from '../lib/catalog';
 import { PreferenceStore, type Preference } from './preferences';
@@ -123,6 +125,69 @@ const MAX_TITLE_LENGTH = 80;
 /** Upper bound for a stored long-term preference. */
 const MAX_PREFERENCE_LENGTH = 500;
 let shuttingDown = false;
+
+/** Skills write their artifacts here; only this tree is exposed over HTTP. */
+const ARTIFACT_ROOT = resolve(repoRoot, 'out');
+
+const ARTIFACT_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.csv': 'text/csv; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.pdf': 'application/pdf',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+};
+
+/**
+ * Serves a file under `<repo>/out/`, addressed by its repo-relative path
+ * (`out/index-charts/上证指数/上证指数_走势图.png`).
+ *
+ * The browser loads generated charts and spreadsheets straight from here, so
+ * answers can embed the PNG instead of only printing a filesystem path.  The
+ * path is resolved and checked against the artifact root to block `..`
+ * traversal.
+ */
+function artifactResponse(rawPath: string): Response {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath);
+  } catch {
+    return json({ detail: '文件路径无效' }, 400);
+  }
+  const target = resolve(repoRoot, decoded.replace(/^\/+/, ''));
+  if (target !== ARTIFACT_ROOT && !target.startsWith(ARTIFACT_ROOT + sep)) {
+    return json({ detail: '禁止访问该路径' }, 403);
+  }
+  let isFile = false;
+  try {
+    isFile = statSync(target).isFile();
+  } catch {
+    // Missing file: fall through to 404.
+  }
+  if (!isFile) return json({ detail: '文件不存在' }, 404);
+
+  const type = ARTIFACT_TYPES[extname(target).toLowerCase()] ?? 'application/octet-stream';
+  const inline =
+    type.startsWith('image/') || type.startsWith('text/') || type === 'application/pdf';
+  const disposition = `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(
+    basename(target),
+  )}`;
+  return new Response(Bun.file(target), {
+    headers: cors({
+      'Content-Type': type,
+      'Content-Disposition': disposition,
+      'Cache-Control': 'no-cache',
+    }),
+  });
+}
 
 /**
  * The CLI renders its input box with Ink, which turns on bracketed paste
@@ -615,6 +680,11 @@ const server = Bun.serve<SocketData>({
 
     if (method === 'GET' && url.pathname === '/health') {
       return json({ ok: true });
+    }
+
+    // Generated skill artifacts (charts, spreadsheets) for the web UI.
+    if (method === 'GET' && url.pathname.startsWith('/files/')) {
+      return artifactResponse(url.pathname.slice('/files/'.length));
     }
 
     // The extension catalog: agents, skills, commands, MCP servers and hooks

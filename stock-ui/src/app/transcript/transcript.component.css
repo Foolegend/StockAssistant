@@ -306,6 +306,18 @@
   margin-bottom: 0;
 }
 
+/* Skill artifacts (e.g. index charts) are embedded by the answer Markdown. */
+.answer img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 14px 0;
+  padding: 6px;
+  border: 1px solid #e2e9f1;
+  border-radius: 8px;
+  background: #fff;
+}
+
 .answer h1,
 .answer h2,
 .answer h3,

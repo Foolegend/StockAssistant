@@ -117,6 +117,15 @@ python .stock/skills/index-trend-chart/scripts/build_index_chart.py \
 
 按 `references/output-template.md` 的结构输出：数据范围与来源 → 交付文件 → 关键时点取值表 → 图上能看出的走势特征 → 不足说明（如某标注点超出数据范围）。数值必须来自脚本输出，不要凭印象写。
 
+**必须内嵌图片，不能只给文件路径。** 在「交付文件」一节开头用 Markdown 图片语法引用刚生成的 PNG：
+
+```markdown
+![上证指数走势图](out/index-charts/上证指数/上证指数_走势图.png)
+```
+
+路径写成 `out/...` 的仓库相对路径（不要写绝对路径，也不要写 `file://`）。前端会把
+`out/` 开头的图片和链接改写为后端可访问地址并直接渲染；xlsx/csv 等文件以链接形式提供下载。
+
 ## 常见坑
 
 | 现象 | 原因 / 处理 |

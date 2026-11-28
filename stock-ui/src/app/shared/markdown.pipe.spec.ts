@@ -47,4 +47,33 @@ describe('MarkdownPipe', () => {
     expect(html).not.toContain('<script>');
     expect(html).toContain('正文');
   });
+
+  it('loads generated artifacts from the backend file endpoint', () => {
+    const html = pipe.transform(
+      '![走势图](out/index-charts/上证指数/上证指数_走势图.png)',
+    );
+
+    expect(html).toContain('<img');
+    expect(html).toContain(
+      'src="http://127.0.0.1:8015/files/out/index-charts/',
+    );
+  });
+
+  it('turns artifact file references into downloadable links', () => {
+    const html = pipe.transform(
+      '[月度数据](out/index-charts/上证指数/上证指数_月度数据.xlsx)',
+    );
+
+    expect(html).toContain(
+      'href="http://127.0.0.1:8015/files/out/index-charts/',
+    );
+    expect(html).toContain('target="_blank"');
+  });
+
+  it('leaves external links untouched', () => {
+    const html = pipe.transform('[示例](https://example.com/a.png)');
+
+    expect(html).toContain('https://example.com/a.png');
+    expect(html).not.toContain('/files/');
+  });
 });
